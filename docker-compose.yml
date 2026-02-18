@@ -1,0 +1,46 @@
+# Docker Compose 多專案部署配置
+# 每個專案運行在獨立的容器中
+
+version: '3.8'
+
+services:
+  # 專案 A
+  sync-project-a:
+    build: .
+    container_name: confluence-sync-project-a
+    environment:
+      - CONFLUENCE_TOKEN=${CONFLUENCE_TOKEN}
+    volumes:
+      - ./config/project_a.yaml:/app/config/project.yaml
+      - ./art_assets_a:/app/art_assets
+      - ./logs:/app/logs
+    command: python main.py --config config/project.yaml --mode watch
+    restart: unless-stopped
+
+  # 專案 B
+  sync-project-b:
+    build: .
+    container_name: confluence-sync-project-b
+    environment:
+      - CONFLUENCE_TOKEN=${CONFLUENCE_TOKEN}
+    volumes:
+      - ./config/project_b.yaml:/app/config/project.yaml
+      - ./art_assets_b:/app/art_assets
+      - ./logs:/app/logs
+    command: python main.py --config config/project.yaml --mode watch
+    restart: unless-stopped
+
+  # 多專案管理器（推薦使用此方式）
+  sync-multi:
+    build: .
+    container_name: confluence-sync-multi
+    environment:
+      - CONFLUENCE_TOKEN=${CONFLUENCE_TOKEN}
+    volumes:
+      - ./config:/app/config
+      - ./configs.txt:/app/configs.txt
+      - ./art_assets_a:/app/art_assets_a
+      - ./art_assets_b:/app/art_assets_b
+      - ./logs:/app/logs
+    command: python multi_project_manager.py --config-list configs.txt --mode watch
+    restart: unless-stopped

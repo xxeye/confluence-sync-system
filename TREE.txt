@@ -1,0 +1,38 @@
+confluence-sync-system/
+.
+.gitignore
+ARCHITECTURE.md
+CHANGELOG.md
+LICENSE
+README.md
+TREE.txt
+config
+├── base.yaml
+├── project_a.yaml
+core
+├── __init__.py
+├── confluence_client.py
+├── file_monitor.py
+├── hash_calculator.py
+├── state_manager.py
+├── sync_engine.py
+logs
+main.py
+projects
+├── __init__.py
+├── slot_game
+│   ├── __init__.py
+│   ├── classifier.py
+│   ├── page_builder.py
+│   ├── sync_engine.py
+requirements.txt
+start.sh
+tests
+├── __init__.py
+├── test_classifier.py
+├── test_hash_calculator.py
+utils
+├── __init__.py
+├── config_loader.py
+├── logger.py
+├── retry.py

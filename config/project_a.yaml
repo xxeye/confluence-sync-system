@@ -1,0 +1,34 @@
+# Slot Game 專案範例配置
+
+project:
+  name: "SlotGameA"
+  type: "slot_game"
+
+confluence:
+  url: "https://your-domain.atlassian.net"
+  page_id: "123456789"
+  email: "your-email@example.com"
+  api_token: "${CONFLUENCE_TOKEN}"
+  user_account_id: "your-account-id"
+
+sync:
+  target_folder: "./art_assets"
+  watch_delay: 10
+  max_workers:
+    download: 15
+    delete: 1
+    upload: 3
+  history_keep: 5
+  
+file_patterns:
+  include:
+    - "*.png"
+    - "*.jpg"
+    - "*.jpeg"
+  exclude:
+    - "*_temp.*"
+    - "*_backup.*"
+
+cache:
+  remote_state_file: ".sync_cache.json"
+  history_file: "version_history.json"

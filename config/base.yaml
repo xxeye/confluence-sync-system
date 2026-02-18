@@ -1,0 +1,36 @@
+# Confluence Sync System - 配置範本
+# 複製此檔案並重新命名為你的專案配置（如 project_a.yaml）
+
+project:
+  name: "MyProject"  # 專案名稱，用於日誌識別
+  type: "slot_game"  # 專案類型，對應 projects/ 下的資料夾名稱
+
+confluence:
+  url: "https://your-domain.atlassian.net"  # Confluence 網域
+  page_id: "123456789"  # 目標頁面 ID
+  email: "your-email@example.com"  # Confluence 帳號
+  api_token: "${CONFLUENCE_TOKEN}"  # API Token，建議使用環境變數
+  user_account_id: "your-account-id"  # 使用者 Account ID（用於歷史記錄）
+
+sync:
+  target_folder: "./art_assets"  # 要監聽的本地資料夾
+  watch_delay: 10  # 檔案變更後的防抖延遲（秒）
+  max_workers:
+    download: 15  # 下載與校驗的並發執行緒數
+    delete: 1     # 刪除操作的並發執行緒數（建議保持 1）
+    upload: 3     # 上傳操作的並發執行緒數
+  history_keep: 5  # Confluence 頁面顯示的歷史版本數量
+  
+file_patterns:
+  include:
+    - "*.png"
+    - "*.jpg"
+    - "*.jpeg"
+  exclude:
+    - "*_temp.*"
+    - "*_backup.*"
+    - "*.db"
+
+cache:
+  remote_state_file: ".sync_cache.json"
+  history_file: "version_history.json"

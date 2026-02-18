@@ -1,0 +1,31 @@
+# Systemd 服務配置範例
+# 用於在 Linux 伺服器上以服務方式運行
+
+# 安裝方式：
+# 1. 複製此文件到 /etc/systemd/system/confluence-sync-multi.service
+# 2. 修改 WorkingDirectory 和 ExecStart 路徑
+# 3. sudo systemctl daemon-reload
+# 4. sudo systemctl enable confluence-sync-multi
+# 5. sudo systemctl start confluence-sync-multi
+
+[Unit]
+Description=Confluence Sync System - Multi Project Manager
+After=network.target
+
+[Service]
+Type=simple
+User=your-username
+Group=your-group
+WorkingDirectory=/path/to/confluence-sync-system
+Environment="CONFLUENCE_TOKEN=your_token_here"
+Environment="PATH=/path/to/venv/bin:/usr/bin:/bin"
+ExecStart=/path/to/venv/bin/python multi_project_manager.py --config-list configs.txt --mode watch
+Restart=always
+RestartSec=10
+
+# 日誌
+StandardOutput=append:/var/log/confluence-sync/stdout.log
+StandardError=append:/var/log/confluence-sync/stderr.log
+
+[Install]
+WantedBy=multi-user.target

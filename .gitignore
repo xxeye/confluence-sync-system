@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 測試
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 日誌
+logs/
+*.log
+
+# 快取和狀態文件
+.sync_cache.json
+version_history.json
+*.db
+
+# 配置（可能包含敏感資訊）
+config/*_production.yaml
+config/*_prod.yaml
+
+# 臨時文件
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# 資源資料夾（根據需求調整）
+art_assets/
