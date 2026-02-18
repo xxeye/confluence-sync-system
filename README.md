@@ -1,6 +1,6 @@
 # Confluence Sync System
 
-企業級的 Confluence 資源自動同步系統，支援多專案管理與擴展。
+Confluence 遊戲美術元件資源自動同步系統，支援多專案管理與擴展。
 
 ## 功能特點
 
