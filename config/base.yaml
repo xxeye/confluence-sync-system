@@ -31,13 +31,21 @@ file_patterns:
   include: ["*.png", "*.jpg", "*.jpeg"]
   exclude: ["*_temp.*", "*_backup.*"]
 
+  # 資料夾篩選（三擇一，都不填就掃全部）
+  exclude_dirs: ["spine", "backup"]       # 排除指定資料夾，其餘都掃
+  include_dirs: []          # 只掃指定資料夾，其餘忽略
+  # 兩個都不填 → 掃全部
+
 cache:
   remote_state_file: ".sync_cache.json"
   history_file: "version_history.json"
 
 # ── 驗證器設定 ────────────────────────────────────────────────
+# 填入值為true、false
 # enabled 未填或 false → 停用，不影響同步與頁面渲染流程
 # dict_file 指向由 Google Sheets Apps Script 匯出的字典 yaml
 validator:
   enabled: false
-  dict_file: "config/slot_game_dict.yaml"
+  dict_file: "config/game_dict.yaml"
+  naming_doc_url: "https://..."
+

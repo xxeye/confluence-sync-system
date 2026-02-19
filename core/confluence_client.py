@@ -3,17 +3,22 @@ Confluence API 客戶端
 封裝所有 Confluence REST API 操作
 """
 
-import requests
-from typing import Dict, List, Optional, Tuple, Any
-from requests.auth import HTTPBasicAuth
-from bs4 import BeautifulSoup
+from __future__ import annotations
 
-from utils import retry, SyncLogger
+import random
+import time
+from typing import Dict, List, Optional, Tuple, Any
+
+import requests
+from bs4 import BeautifulSoup
+from requests.auth import HTTPBasicAuth
+
+from utils import SyncLogger
 
 
 class ConfluenceClient:
     """Confluence API 客戶端"""
-    
+
     def __init__(
         self,
         base_url: str,
@@ -24,7 +29,7 @@ class ConfluenceClient:
     ):
         """
         初始化客戶端
-        
+
         Args:
             base_url: Confluence 基礎 URL
             email: 帳號 Email
@@ -37,316 +42,351 @@ class ConfluenceClient:
         self.auth = HTTPBasicAuth(email, api_token)
         self.logger = logger
         self.timeout = 30
-    
+
+        # ✅ 使用 Session 重用連線（Keep-Alive），並統一 auth
+        self.session = requests.Session()
+        self.session.auth = self.auth
+
     def _log(self, level: str, icon: str, message: str, exc_info=None):
         """內部日誌方法"""
-        if self.logger:
-            if level == 'error':
-                self.logger.error(icon, message, exc_info=exc_info)
-            elif level == 'warning':
-                self.logger.warning(icon, message)
-            else:
-                self.logger.info(icon, message)
-    
-    @retry(max_attempts=3, delay=1, exceptions=(requests.RequestException,))
+        if not self.logger:
+            return
+        if level == 'error':
+            self.logger.error(icon, message, exc_info=exc_info)
+        elif level == 'warning':
+            self.logger.warning(icon, message)
+        else:
+            self.logger.info(icon, message)
+
+    def _normalize_content_id(self, raw_id: Optional[str]) -> Optional[str]:
+        """
+        Confluence 有時會回傳像 'att123456' 這種 id。
+        REST v1 某些 endpoint 只接受純數字 id，所以這裡統一正規化。
+        """
+        if not raw_id:
+            return None
+
+        s = str(raw_id).strip()
+        # 常見前綴：att
+        if s.startswith("att"):
+            s = s[3:]
+
+        # 只保留數字
+        digits = "".join(ch for ch in s if ch.isdigit())
+        return digits or None
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        json: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        files=None,
+        data=None,
+        stream: bool = False,
+        timeout: Optional[int] = None,
+        ok_status: Tuple[int, ...] = (200, 201, 204),
+        max_attempts: int = 5,
+    ) -> requests.Response:
+        """
+        統一的 HTTP 入口（含重試/退避）：
+        - 429：尊重 Retry-After
+        - 5xx：短暫故障重試
+        - 409：Confluence 鎖定/衝突類型
+        - ✅ 其他 4xx（例如 404）不重試，直接拋出
+        """
+        if timeout is None:
+            timeout = self.timeout
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = self.session.request(
+                    method=method,
+                    url=url,
+                    params=params,
+                    json=json,
+                    headers=headers,
+                    files=files,
+                    data=data,
+                    timeout=timeout,
+                    stream=stream,
+                )
+
+                code = resp.status_code
+
+                # ✅ 非暫時性 4xx：直接拋出（避免 404 一直重試）
+                if 400 <= code <= 499 and code not in (409, 429):
+                    try:
+                        err_detail = resp.json()
+                    except Exception:
+                        err_detail = resp.text[:2000]
+                    raise requests.HTTPError(
+                        f"{code} Error: {resp.reason}\nDetail: {err_detail}",
+                        response=resp
+                    )
+
+                # 429/409/5xx：可重試
+                if code in (429, 409) or (500 <= code <= 599):
+                    retry_after = resp.headers.get("Retry-After")
+                    if retry_after and str(retry_after).isdigit():
+                        sleep_s = int(retry_after)
+                    else:
+                        sleep_s = min(30, (2 ** (attempt - 1))) + random.random()
+
+                    self._log(
+                        "warning",
+                        "⏳",
+                        f"HTTP {code} on {method} {resp.url}，將重試（{attempt}/{max_attempts}），等待 {sleep_s:.1f}s"
+                    )
+                    time.sleep(sleep_s)
+                    continue
+
+                if code not in ok_status:
+                    try:
+                        err_detail = resp.json()
+                    except Exception:
+                        err_detail = resp.text[:2000]
+                    raise requests.HTTPError(
+                        f"{code} Error: {resp.reason}\nDetail: {err_detail}",
+                        response=resp
+                    )
+
+                return resp
+
+            except requests.RequestException as e:
+                last_exc = e
+                # ✅ 若是明確的非暫時性 4xx HTTPError，直接拋出
+                if isinstance(e, requests.HTTPError) and getattr(e, "response", None) is not None:
+                    c = e.response.status_code
+                    if 400 <= c <= 499 and c not in (409, 429):
+                        raise
+
+                if attempt == max_attempts:
+                    raise
+
+                backoff = min(10, (2 ** (attempt - 1))) + random.random()
+                self._log(
+                    "warning",
+                    "⏳",
+                    f"Request error: {e}，重試中（{attempt}/{max_attempts}），等待 {backoff:.1f}s"
+                )
+                time.sleep(backoff)
+
+        raise last_exc or RuntimeError("Unknown request failure")
+
     def get_page_content(self) -> Tuple[str, int]:
-        """
-        取得頁面內容和版本號
-        
-        Returns:
-            (XHTML 內容, 版本號)
-        
-        Raises:
-            requests.RequestException: API 請求失敗
-        """
+        """取得頁面內容和版本號"""
         url = f"{self.base_url}/wiki/rest/api/content/{self.page_id}"
         params = {'expand': 'body.storage,version'}
-        
-        response = requests.get(
-            url,
-            auth=self.auth,
-            params=params,
-            timeout=self.timeout
-        )
-        response.raise_for_status()
-        
-        data = response.json()
+
+        resp = self._request("GET", url, params=params, ok_status=(200,))
+        data = resp.json()
         xhtml = data['body']['storage']['value']
         version = data['version']['number']
-        
         return xhtml, version
-    
-    @retry(max_attempts=3, delay=1, exceptions=(requests.RequestException,))
-    def update_page_content(
-        self,
-        content: str,
-        title: str,
-        current_version: int
-    ) -> bool:
-        """
-        更新頁面內容
-        
-        Args:
-            content: 新的 XHTML 內容
-            title: 頁面標題
-            current_version: 當前版本號
-        
-        Returns:
-            是否成功
-        
-        Raises:
-            requests.RequestException: API 請求失敗
-        """
+
+    def update_page_content(self, content: str, title: str, current_version: int) -> bool:
+        """更新頁面內容"""
         url = f"{self.base_url}/wiki/rest/api/content/{self.page_id}"
-        
         payload = {
             'type': 'page',
             'title': title,
             'version': {'number': current_version + 1},
-            'body': {
-                'storage': {
-                    'value': content,
-                    'representation': 'storage'
-                }
-            }
+            'body': {'storage': {'value': content, 'representation': 'storage'}}
         }
-        
-        response = requests.put(
-            url,
-            json=payload,
-            auth=self.auth,
-            timeout=self.timeout
-        )
 
-        if not response.ok:
-            # 印出 Confluence 回傳的詳細錯誤訊息，方便診斷 XHTML 問題
-            try:
-                err_detail = response.json()
-            except Exception:
-                err_detail = response.text[:2000]
-            raise requests.HTTPError(
-                f"{response.status_code} Error: {response.reason}\n"
-                f"Detail: {err_detail}",
-                response=response
-            )
-
+        self._request("PUT", url, json=payload, ok_status=(200, 204))
         return True
-    
-    @retry(max_attempts=3, delay=1, exceptions=(requests.RequestException,))
+
     def get_all_attachments(self) -> List[Dict[str, Any]]:
-        """
-        取得頁面所有附件的元數據
-        
-        Returns:
-            附件列表
-        
-        Raises:
-            requests.RequestException: API 請求失敗
-        """
+        """取得頁面所有附件的元數據"""
         url = f"{self.base_url}/wiki/rest/api/content/{self.page_id}/child/attachment"
-        all_attachments = []
+        all_attachments: List[Dict[str, Any]] = []
         start = 0
         limit = 100
-        
+
         while True:
             params = {'limit': limit, 'start': start}
-            response = requests.get(
-                url,
-                auth=self.auth,
-                params=params,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            results = data.get('results', [])
-            
+            resp = self._request("GET", url, params=params, ok_status=(200,))
+            data = resp.json()
+            results = data.get('results', []) or []
+
             if not results:
                 break
-            
+
             all_attachments.extend(results)
             start += limit
-            
+
             if len(results) < limit:
                 break
-        
+
         return all_attachments
-    
-    @retry(max_attempts=3, delay=1, exceptions=(requests.RequestException,))
+
     def download_attachment(self, download_path: str) -> bytes:
-        """
-        下載附件內容
-        
-        Args:
-            download_path: 附件下載路徑（來自附件元數據）
-        
-        Returns:
-            附件二進位內容
-        
-        Raises:
-            requests.RequestException: 下載失敗
-        """
+        """下載附件內容"""
         url = f"{self.base_url}/wiki{download_path}"
-        response = requests.get(
-            url,
-            auth=self.auth,
-            timeout=self.timeout
-        )
-        response.raise_for_status()
-        
-        return response.content
-    
-    @retry(max_attempts=3, delay=1, exceptions=(requests.RequestException,))
+        resp = self._request("GET", url, ok_status=(200,))
+        return resp.content
+
     def delete_attachment(self, attachment_id: str) -> bool:
-        """
-        刪除附件
-        
-        Args:
-            attachment_id: 附件 ID
-        
-        Returns:
-            是否成功
-        
-        Raises:
-            requests.RequestException: 刪除失敗
-        """
+        """刪除附件"""
         url = f"{self.base_url}/wiki/rest/api/content/{attachment_id}"
-        response = requests.delete(
-            url,
-            auth=self.auth,
-            timeout=self.timeout
-        )
-        
-        return response.status_code in [200, 204]
-    
-    @retry(max_attempts=3, delay=2, exceptions=(requests.RequestException,))
-    def upload_attachment(
-        self,
-        file_path: str,
-        filename: str
-    ) -> Optional[str]:
+        self._request("DELETE", url, ok_status=(200, 204))
+        return True
+
+    def upload_attachment(self, file_path: str, filename: str) -> Optional[str]:
         """
-        上傳或更新附件（使用 PUT 原子操作）
-        
-        Args:
-            file_path: 本地檔案路徑
-            filename: 檔案名稱
-        
-        Returns:
-            新的附件 ID，失敗返回 None
-        
-        Raises:
-            requests.RequestException: 上傳失敗
+        上傳或更新附件（標準 Confluence Cloud REST v1 流程）
+
+        - 若同名附件已存在：POST /content/{page_id}/child/attachment/{attachment_id}/data 進行更新
+        - 若不存在：POST /content/{page_id}/child/attachment 進行新增
+        """
+        headers = {"X-Atlassian-Token": "nocheck"}
+        mime = self._guess_mime_type(filename)
+
+        existing_id = self._find_attachment_id_by_filename(filename)
+
+        # 1) 更新
+        if existing_id:
+            url = f"{self.base_url}/wiki/rest/api/content/{self.page_id}/child/attachment/{existing_id}/data"
+            with open(file_path, "rb") as f:
+                files = {"file": (filename, f, mime)}
+                resp = self._request("POST", url, headers=headers, files=files, ok_status=(200, 201))
+            # 更新成功通常會回 results[0].id（可能仍帶 att 前綴）
+            try:
+                rid = resp.json()["results"][0]["id"]
+                return self._normalize_content_id(rid) or existing_id
+            except Exception:
+                return existing_id
+
+        # 2) 新增
+        url = f"{self.base_url}/wiki/rest/api/content/{self.page_id}/child/attachment"
+        with open(file_path, "rb") as f:
+            files = {"file": (filename, f, mime)}
+            resp = self._request("POST", url, headers=headers, files=files, ok_status=(200, 201))
+
+        try:
+            rid = resp.json()["results"][0]["id"]
+            return self._normalize_content_id(rid)
+        except Exception:
+            return None
+
+    def _guess_mime_type(self, filename: str) -> str:
+        """依檔名猜測 MIME type（猜不到就用 application/octet-stream）"""
+        import mimetypes
+
+        mime, _ = mimetypes.guess_type(filename)
+        return mime or "application/octet-stream"
+    
+    def _find_attachment_id_by_filename(self, filename: str) -> Optional[str]:
+        """
+        在此頁面附件中找同名檔案，找到則回傳 attachment_id，否則回傳 None
+
+        Confluence REST v1 支援用 filename filter 查附件：
+        GET /wiki/rest/api/content/{page_id}/child/attachment?filename=xxx
         """
         url = f"{self.base_url}/wiki/rest/api/content/{self.page_id}/child/attachment"
-        headers = {'X-Atlassian-Token': 'nocheck'}
-        
-        with open(file_path, 'rb') as f:
-            files = {'file': (filename, f, 'image/png')}
-            response = requests.put(
-                url,
-                auth=self.auth,
-                headers=headers,
-                files=files,
-                timeout=self.timeout
-            )
-        
-        if response.status_code == 200:
-            data = response.json()
-            return data['results'][0]['id']
-        elif response.status_code == 409:
-            # 頁面鎖定衝突，由重試機制處理
-            raise requests.RequestException("Page locked conflict (409)")
-        else:
-            response.raise_for_status()
+        params = {
+            "filename": filename,
+            "limit": 1,
+        }
+
+        resp = self._request("GET", url, params=params, ok_status=(200,))
+        data = resp.json()
+        results = data.get("results", []) or []
+        if not results:
             return None
-    
+
+        return results[0].get("id")    
+
     def set_page_appearance(self, appearance: str = "full-width") -> bool:
         """
-        設定頁面寬度外觀（透過 content property API）
+        設定頁面寬度外觀（content property API, v2）
 
-        Confluence Cloud 的頁面寬度不在 body storage 裡，
-        必須透過獨立的 content property 端點設定。
-
-        appearance 可選值:
-            "full-width"  → UI 顯示為「寬版」/「全版」
-            "fixed-width" → UI 顯示為「窄版」（預設）
-
-        此方法會自動處理「首次建立」與「已存在時更新」兩種情況。
+        ✅ GET 一次 properties → 建 map → draft/published 各自 PUT 或 POST
         """
         base = f"{self.base_url}/wiki/api/v2/pages/{self.page_id}/properties"
 
+        resp = self._request("GET", base, params={"limit": 200}, ok_status=(200,))
+        results = resp.json().get("results", []) or []
+
+        prop_map: Dict[str, Dict[str, Any]] = {}
+        for p in results:
+            k = p.get("key")
+            if not k:
+                continue
+            prop_map[k] = {
+                "id": p.get("id"),
+                "ver": (p.get("version") or {}).get("number", 1),
+            }
+
         for key in ("content-appearance-draft", "content-appearance-published"):
-            # ① 先嘗試取得現有 property（確認是否已設定過）
-            get_resp = requests.get(
-                base,
-                auth=self.auth,
-                timeout=self.timeout
-            )
-            existing_id   = None
-            existing_ver  = None
-
-            if get_resp.status_code == 200:
-                for prop in get_resp.json().get("results", []):
-                    if prop.get("key") == key:
-                        existing_id  = prop.get("id")
-                        existing_ver = prop.get("version", {}).get("number", 1)
-                        break
-
-            if existing_id:
-                # ② 已存在 → PUT 更新
-                put_resp = requests.put(
-                    f"{base}/{existing_id}",
-                    json={
-                        "key": key,
-                        "value": appearance,
-                        "version": {"number": existing_ver + 1}
-                    },
-                    auth=self.auth,
-                    timeout=self.timeout
+            if key in prop_map and prop_map[key].get("id"):
+                pid = prop_map[key]["id"]
+                ver = prop_map[key]["ver"]
+                self._request(
+                    "PUT",
+                    f"{base}/{pid}",
+                    json={"key": key, "value": appearance, "version": {"number": ver + 1}},
+                    ok_status=(200, 204),
                 )
-                if put_resp.status_code not in (200, 204):
-                    self._log("warning", "⚠️",
-                              f"更新 {key} 失敗: {put_resp.status_code}")
             else:
-                # ③ 不存在 → POST 建立
-                post_resp = requests.post(
+                self._request(
+                    "POST",
                     base,
                     json={"key": key, "value": appearance},
-                    auth=self.auth,
-                    timeout=self.timeout
+                    ok_status=(200, 201),
                 )
-                if post_resp.status_code not in (200, 201):
-                    self._log("warning", "⚠️",
-                              f"建立 {key} 失敗: {post_resp.status_code}")
 
         return True
 
-    def parse_history_from_page(
-        self,
-        xhtml: str,
-        max_count: int = 10
-    ) -> List[Dict[str, str]]:
-        """
-        從頁面 XHTML 解析歷史表格
-        
-        Args:
-            xhtml: 頁面 XHTML 內容
-            max_count: 最大解析數量
-        
-        Returns:
-            歷史記錄列表
-        """
-        history = []
+    def get_page_versions(self) -> List[Dict[str, Any]]:
+        """取得頁面所有版本清單（由新到舊）"""
+        url = f"{self.base_url}/wiki/rest/api/content/{self.page_id}/version"
+        all_versions: List[Dict[str, Any]] = []
+        start = 0
+        limit = 200
+
+        while True:
+            resp = self._request(
+                "GET",
+                url,
+                params={'limit': limit, 'start': start},
+                ok_status=(200,),
+            )
+            data = resp.json()
+            results = data.get('results', []) or []
+            if not results:
+                break
+
+            all_versions.extend(results)
+            start += limit
+
+            if len(results) < limit:
+                break
+
+        return all_versions
+
+    def delete_page_version(self, version_number: int) -> bool:
+        """刪除指定頁面版本（Confluence Cloud 不允許刪除最新版本）"""
+        url = f"{self.base_url}/wiki/rest/api/content/{self.page_id}/version/{version_number}"
+        self._request("DELETE", url, ok_status=(200, 204))
+        return True
+
+    def parse_history_from_page(self, xhtml: str, max_count: int = 10) -> List[Dict[str, str]]:
+        """從頁面 XHTML 解析歷史表格"""
+        history: List[Dict[str, str]] = []
         soup = BeautifulSoup(xhtml, 'html.parser')
-        
-        # 尋找「版本更新說明」標題
+
         h2_node = soup.find('h2', string=lambda s: s and '版本更新說明' in s)
-        
+
         if h2_node:
             table = h2_node.find_next('table')
             if table:
-                rows = table.find_all('tr')[1:max_count + 1]  # 跳過標題行
+                rows = table.find_all('tr')[1:max_count + 1]
                 for row in rows:
                     cols = row.find_all('td')
                     if len(cols) >= 3:
@@ -356,5 +396,5 @@ class ConfluenceClient:
                             'log': cols[1].get_text(strip=True),
                             'user_id': user_tag.get('ri:account-id') if user_tag else ''
                         })
-        
+
         return history

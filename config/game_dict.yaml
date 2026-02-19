@@ -1,0 +1,151 @@
+# game_dict.yaml
+# 命名規範字典 — 由 Google Sheets 匯出，請勿手動編輯
+# 更新方式：在 Google Sheets「擴充功能 > Apps Script」執行 exportDict()，
+#           將輸出內容覆蓋此檔案後重啟程式即可生效
+
+# 空值標記
+empty_option: "無語系或非數字則為空"
+
+# 場景/模組 [sceneModule] — 第 1 欄
+scene_module:
+  - lobby
+  - home
+  - shop
+  - battle
+  - map
+  - profile
+  - quest
+  - event
+  - result
+  - config
+
+# 類型 [type] — 第 2 欄
+type:
+  - nu
+  - text
+  - btn
+  - img
+  - mask
+
+# 命名白名單 [name] — 第 3 欄
+named:
+  - tbd
+  - hero
+  - enemy
+  - reward
+
+# 狀態 [visualState] — 第 4 欄
+state:
+  - na
+  - confirm
+  - cancel
+  - blur
+  - normal
+
+# 語系 [language] — 第 5 欄
+language:
+  - cn
+  - cm
+  - jp
+  - kr
+  - th
+  - id
+  - vn
+  - es
+  - pt
+  - tr
+  - mm
+  - bd
+  - en
+
+# 位圖字體/數字 [bitmapFont] — 第 5 欄（NU 數字組用）
+bitmap_font:
+  - "0"
+  - "1"
+  - "2"
+  - "3"
+  - "4"
+  - "5"
+  - "6"
+  - "7"
+  - "8"
+  - "9"
+  - comma
+  - dot
+  - plus
+  - minus
+  - of
+  - x
+  - k
+  - m
+  - "$"
+  - "₽"
+  - "¥"
+  - "₩"
+  - "€"
+  - "฿"
+  - "৳"
+  - "₫"
+  - "₺"
+  - C
+  - G
+  - p
+  - R
+  - S
+
+# 禁詞清單 [forbidden_words]
+forbidden_words:
+  - null
+  - nil
+  - undefined
+  - nan
+  - none
+  - void
+  - empty
+  - init
+  - system
+  - app
+  - config
+  - settings
+  - main
+  - index
+  - build
+  - tmp
+  - temp
+  - test
+  - debug
+  - trial
+  - dummy
+  - old
+  - new
+  - latest
+  - data
+  - object
+  - item
+  - stuff
+  - thing
+  - etc
+  - error
+  - err
+  - exception
+  - warning
+  - fail
+  - success
+  - src
+  - dist
+  - bin
+  - lib
+  - assets
+  - asset
+  - resource
+  - resources
+  - public
+  - private
+  - dev
+  - prod
+  - stage
+  - staging
+  - release
+  - default
+  - template
+  - final

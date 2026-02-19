@@ -18,15 +18,16 @@ class SlotGameSyncEngine(BaseSyncEngine):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.classifier   = SlotGameClassifier()
         self.page_builder = SlotGamePageBuilder()
+        # classifier 暫時用預設 lang_codes，待 validator 初始化後更新
+        self.classifier   = SlotGameClassifier()
 
         # ── 說明文件 ──────────────────────────────────────────
         notes_file = self.config.get('confluence', {}).get('notes_file')
         self.note_loader = NoteLoader(notes_file)
 
         if not self.note_loader.is_empty():
-            self.logger.info("📄", f"說明文件已載入，共 {len(self.note_loader._notes)} 筆說明")
+            self.logger.info("📄", f"說明文件已載入，共 {len(self.note_loader.as_dict())} 筆說明")
         else:
             self.logger.info("📄", "未設定說明文件或說明文件為空，說明欄位將留空")
 
@@ -42,6 +43,12 @@ class SlotGameSyncEngine(BaseSyncEngine):
                 try:
                     loader         = DictLoader(dict_file)
                     self.validator = FilenameValidator(loader)
+                    # 讓 classifier 使用與 validator 相同的語系集合，避免兩邊不同步
+                    self.classifier = SlotGameClassifier(
+                        lang_codes=loader.language,
+                        bitmap_font_digits=loader.bitmap_font,
+                        scene_modules=loader.scene_module,
+                    )
                     self.logger.info("🔍", f"檔名驗證器已啟用，字典：{dict_file}")
                 except FileNotFoundError as e:
                     self.logger.warning("⚠️", f"字典檔不存在，驗證器停用：{e}")
@@ -61,8 +68,12 @@ class SlotGameSyncEngine(BaseSyncEngine):
         categories: Dict[str, Any],
         history: List[Dict[str, str]],
     ) -> str:
+        # 每次組頁前重新讀取 xlsx，確保監聽模式下說明文件改動即時生效
+        self.note_loader.reload()
         jira_filter_url = self.config.get('confluence', {}).get('jira_filter_url')
-        notes           = dict(self.note_loader._notes)
+        notes           = self.note_loader.as_dict()
+
+        naming_doc_url = self.config.get('validator', {}).get('naming_doc_url')
 
         return self.page_builder.assemble(
             categories,
@@ -70,6 +81,7 @@ class SlotGameSyncEngine(BaseSyncEngine):
             jira_filter_url,
             notes=notes,
             validator=self.validator,   # None 時 page_builder 自動跳過驗證
+            naming_doc_url=naming_doc_url,
         )
 
     def _update_history_only(self, current_xhtml: str) -> str:
@@ -91,3 +103,6 @@ class SlotGameSyncEngine(BaseSyncEngine):
                 categories,
                 self.state.get_history_slice(self.history_keep)
             )
+
+
+

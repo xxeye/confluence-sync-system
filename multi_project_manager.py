@@ -9,7 +9,7 @@ import argparse
 import threading
 from pathlib import Path
 from typing import List, Dict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils import ConfigLoader, SyncLogger, LogIcons
 from core import ConfluenceClient, StateManager, FileMonitor
@@ -106,54 +106,151 @@ class ProjectInstance:
             'include', ['*.png', '*.jpg', '*.jpeg']
         )
         watch_delay = self.config['sync']['watch_delay']
-        
+
+        # 若 config 有設定 notes_file（xlsx 說明文件），一併監聽其儲存事件
+        notes_file = self.config.get('confluence', {}).get('notes_file')
+        extra_files = [notes_file] if notes_file else []
+
         self.monitor = FileMonitor(
             watch_path=self.config['sync']['target_folder'],
             file_patterns=file_patterns,
             callback=self._on_file_change,
-            delay=watch_delay
+            delay=watch_delay,
+            extra_files=extra_files,
         )
-        
+
         self.monitor.start()
-        self.logger.info(
-            LogIcons.WATCH,
-            f"[{self.project_id}] 監控已啟動"
-        )
+
+        suffix = f"（含說明文件：{notes_file}）" if notes_file else ""
+        self.logger.info(LogIcons.WATCH, f"[{self.project_id}] 監控已啟動{suffix}")
     
     def stop_monitoring(self) -> None:
-        """停止檔案監聽"""
+        """停止檔案監聽（含 dirty timer 的安全收尾）"""
+        # 1) 停止 watchdog observer
         if self.monitor:
-            self.monitor.stop()
-            self.logger.info(
-                LogIcons.COMPLETE,
-                f"[{self.project_id}] 監控已停止"
-            )
-    
-    def _on_file_change(self) -> None:
-        """檔案變更回調"""
-        if self.sync_lock.acquire(blocking=False):
             try:
+                self.monitor.stop()
+                self.logger.info(
+                    LogIcons.COMPLETE,
+                    f"[{self.project_id}] 監控已停止"
+                )
+            except Exception as e:
+                self.logger.error(
+                    LogIcons.ERROR,
+                    f"[{self.project_id}] 停止監控失敗: {e}",
+                    exc_info=e
+                )
+
+        # 2) 取消 dirty 合併 / retry timer（避免 stop 後又觸發 sync）
+        if hasattr(self, "_dirty_timer") and self._dirty_timer:
+            try:
+                self._dirty_timer.cancel()
+            except Exception:
+                pass
+            self._dirty_timer = None
+
+        # 3) 清除 dirty 狀態（純保險，避免殘留）
+        if hasattr(self, "_dirty"):
+            self._dirty = False
+    
+    def _on_file_change(self, notes_dirty: bool = False) -> None:
+        """
+        Dirty + 合併觸發：
+        - 圖片或 xlsx 事件進來只標記 dirty / notes_dirty
+        - 用 Timer 合併一波事件（避免連續觸發）
+        - 若同步中拿不到 lock，延後重試
+        - 同步期間又有事件，結束後自動補跑下一輪
+        - notes_dirty 只升不降：圖片事件不會清掉已標記的 notes_dirty
+        """
+        import threading
+        import time
+
+        # ---- lazy init ----
+        if not hasattr(self, "_dirty"):
+            self._dirty = False
+        if not hasattr(self, "_notes_dirty"):
+            self._notes_dirty = False
+        if not hasattr(self, "_dirty_lock"):
+            self._dirty_lock = threading.Lock()
+        if not hasattr(self, "_dirty_timer"):
+            self._dirty_timer = None
+
+        MERGE_WINDOW_S = 1.2
+        RETRY_S = 1.0
+
+        def _arm_timer(delay_s: float) -> None:
+            with self._dirty_lock:
+                if self._dirty_timer:
+                    try:
+                        self._dirty_timer.cancel()
+                    except Exception:
+                        pass
+                    self._dirty_timer = None
+                t = threading.Timer(delay_s, _drain_dirty)
+                t.daemon = True
+                self._dirty_timer = t
+                t.start()
+
+        def _drain_dirty() -> None:
+            with self._dirty_lock:
+                if not self._dirty:
+                    return
+
+            if not self.sync_lock.acquire(blocking=False):
+                self.logger.info(
+                    LogIcons.NOTE,
+                    f"[{self.project_id}] 正在同步中，已標記 dirty，{RETRY_S:.1f}s 後重試"
+                )
+                _arm_timer(RETRY_S)
+                return
+
+            try:
+                # 讀走兩個 flag，同時清零
+                with self._dirty_lock:
+                    self._dirty = False
+                    current_notes_dirty = self._notes_dirty
+                    self._notes_dirty = False
+
                 self.logger.info(
                     LogIcons.PROGRESS,
-                    f"[{self.project_id}] 偵測到變更，開始同步..."
+                    f"[{self.project_id}] (dirty) 合併後開始同步..."
                 )
                 self.engine.run_sync(
                     is_startup=False,
-                    log_reason="Watcher Sync"
+                    log_reason="Watcher Sync (dirty)",
+                    notes_dirty=current_notes_dirty,
                 )
+
             except Exception as e:
                 self.logger.error(
                     LogIcons.ERROR,
                     f"[{self.project_id}] 同步失敗: {e}",
                     exc_info=e
                 )
+                with self._dirty_lock:
+                    self._dirty = True
+                _arm_timer(RETRY_S)
+
             finally:
                 self.sync_lock.release()
-        else:
-            self.logger.warning(
-                LogIcons.WARNING,
-                f"[{self.project_id}] 上次同步未完成，跳過此次觸發"
-            )
+
+                with self._dirty_lock:
+                    needs_more = self._dirty
+
+                if needs_more:
+                    self.logger.info(
+                        LogIcons.NOTE,
+                        f"[{self.project_id}] 同步期間偵測到新變更，準備補跑下一輪"
+                    )
+                    _arm_timer(MERGE_WINDOW_S)
+
+        # ---- 事件進來：標記 dirty，notes_dirty 只升不降 ----
+        with self._dirty_lock:
+            self._dirty = True
+            if notes_dirty:
+                self._notes_dirty = True
+
+        _arm_timer(MERGE_WINDOW_S)
 
 
 class MultiProjectManager:
@@ -216,9 +313,13 @@ class MultiProjectManager:
             }
             
             success_count = 0
-            for future in futures:
-                if future.result():
-                    success_count += 1
+            for future in as_completed(futures):
+                project_id = futures[future]
+                try:
+                    if future.result():
+                        success_count += 1
+                except Exception as e:
+                    print(f"❌ [{project_id}] 同步異常: {e}")
         
         print(f"\n✅ 完成！成功: {success_count}/{len(self.projects)}")
     
@@ -325,37 +426,11 @@ def main():
     
     args = parser.parse_args()
     
-    # 收集配置文件路徑
-    config_paths = []
-    
-    if args.configs:
-        # 從命令列參數
-        config_paths = args.configs
-    elif args.config_list:
-        # 從配置清單文件
-        list_file = Path(args.config_list)
-        if not list_file.exists():
-            print(f"❌ 錯誤：配置清單文件不存在: {args.config_list}")
-            sys.exit(1)
-        
-        with open(list_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    config_paths.append(line)
-    
-    # 驗證配置文件
-    valid_configs = []
-    for config_path in config_paths:
-        if Path(config_path).exists():
-            valid_configs.append(config_path)
-        else:
-            print(f"⚠️  警告：配置文件不存在，已跳過: {config_path}")
-    
-    if not valid_configs:
-        print("❌ 錯誤：沒有有效的配置文件")
-        sys.exit(1)
-    
+    # 收集並驗證配置文件路徑（使用統一的 ConfigLoader.load_config_paths）
+    valid_configs = ConfigLoader.load_config_paths(
+        configs=args.configs,
+        config_list=args.config_list,
+    )
     print(f"📋 找到 {len(valid_configs)} 個配置文件")
     
     # 創建多專案管理器
@@ -388,3 +463,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

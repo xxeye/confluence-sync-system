@@ -49,10 +49,12 @@ logs/
 .sync_cache.json
 version_history.json
 *.db
+all_code.txt
 
-# 配置（只保留 base.yaml，其他專案設定檔排除）
+# 配置（專案設定檔排除）
 config/*.yaml
 !config/base.yaml
+!config/game_dict.yaml
 
 # 壓縮檔
 *.zip

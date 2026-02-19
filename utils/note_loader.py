@@ -29,6 +29,42 @@ class NoteLoader:
         self._file = Path(notes_file) if notes_file else None
         self._load()
 
+    def reload(self) -> bool:
+        """重新從磁碟讀取 xlsx（監聽模式下 xlsx 更新後呼叫）。
+        
+        Returns:
+            True = 有成功載入新資料；False = 檔案不存在或讀取失敗（舊資料保留不變）
+        """
+        old_count = len(self._notes)
+        new_notes: Dict[str, str] = {}
+
+        if not self._file or not self._file.exists():
+            return False
+
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(self._file, read_only=True, data_only=True)
+            ws = wb.active
+            for row in ws.iter_rows(min_row=1, values_only=True):
+                if not row or row[0] is None:
+                    continue
+                key = str(row[0]).strip()
+                note = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
+                if key:
+                    new_notes[key] = note
+            wb.close()
+
+            self._notes = new_notes
+            print(f"[NoteLoader] 重新載入說明文件：{self._file}，共 {len(self._notes)} 筆（原 {old_count} 筆）")
+            return True
+
+        except ImportError:
+            print("[NoteLoader] 缺少 openpyxl，無法重新載入。")
+            return False
+        except Exception as e:
+            print(f"[NoteLoader] 重新載入失敗：{e}，保留舊資料。")
+            return False
+
     def _load(self) -> None:
         """讀取 xlsx；失敗時靜默略過（不中斷同步流程）"""
         if not self._file:
@@ -80,6 +116,11 @@ class NoteLoader:
         stem = Path(key).stem
         return self._notes.get(stem, "")
 
+    def as_dict(self) -> Dict[str, str]:
+        """回傳所有說明資料的副本（公開介面，避免外部直接存取 _notes）"""
+        return dict(self._notes)
+
     def is_empty(self) -> bool:
         """是否沒有任何說明資料"""
         return len(self._notes) == 0
+
