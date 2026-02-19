@@ -254,7 +254,7 @@ class BaseSyncEngine(ABC):
         
         for root, _, files in os.walk(target_path):
             for filename in files:
-                if not self._is_valid_file(filename):
+                if not self._is_valid_file(filename, os.path.join(root, filename)):
                     continue
                 
                 file_path = os.path.join(root, filename)
@@ -281,10 +281,27 @@ class BaseSyncEngine(ABC):
         
         return local_state
     
-    def _is_valid_file(self, filename: str) -> bool:
-        """檢查檔案是否有效"""
+    def _is_valid_file(self, filename: str, file_path: str = None) -> bool:
+        """
+        檢查檔案是否有效
+
+        排除規則（硬編碼）：
+        1. 路徑中含有 spine 資料夾
+        2. 檔名含有 (1) — 代表雲端重複下載的副本
+        """
         filename_lower = filename.lower()
-        
+
+        # 硬排除：路徑含 spine 資料夾
+        if file_path:
+            import os
+            parts = os.path.normpath(file_path).split(os.sep)
+            if any(p.lower() == 'spine' for p in parts):
+                return False
+
+        # 硬排除：檔名含 (1)（雲端同步錯誤副本）
+        if '(1)' in filename:
+            return False
+
         # 檢查包含模式
         include_patterns = self.file_patterns.get('include', ['*.png', '*.jpg', '*.jpeg'])
         if include_patterns:
@@ -297,7 +314,7 @@ class BaseSyncEngine(ABC):
                         break
             if not matches:
                 return False
-        
+
         # 檢查排除模式
         exclude_patterns = self.file_patterns.get('exclude', [])
         for pattern in exclude_patterns:
@@ -305,7 +322,7 @@ class BaseSyncEngine(ABC):
                 suffix = pattern[1:]
                 if suffix in filename_lower:
                     return False
-        
+
         return True
     
     def _calculate_diff(
@@ -444,13 +461,16 @@ class BaseSyncEngine(ABC):
             self.user_id,
             self.history_keep
         )
-        
+
+        # 取得當前頁面版本（只取一次）
+        current_xhtml, current_version = self.client.get_page_content()
+
         if needs_redraw:
             self.logger.info(LogIcons.PAINT, "執行頁面全量重新編排...")
-            
+
             # 分類資源
             categories = self.classify_assets(local_state)
-            
+
             # 建構頁面內容
             new_content = self.build_page_content(
                 categories,
@@ -458,21 +478,32 @@ class BaseSyncEngine(ABC):
             )
         else:
             self.logger.info(LogIcons.NOTE, "僅更新歷史表格...")
-            
-            # 只更新歷史表格
-            current_xhtml, _ = self.client.get_page_content()
+
+            # 只更新歷史表格，傳入已取得的 xhtml
             new_content = self._update_history_only(current_xhtml)
-        
+
         # 推送到 Confluence
-        current_xhtml, current_version = self.client.get_page_content()
         page_title = f"美術資源清單_{self.project_name}"
-        
+
+        # ── Debug dump：將送出的 XHTML 存到檔案，方便排查 500 錯誤 ──
+        import pathlib
+        logs_dir = pathlib.Path("logs")
+        logs_dir.mkdir(exist_ok=True)
+        dump_path = logs_dir / f"{self.project_name}_debug_last_content.html"
+        dump_path.write_text(new_content, encoding="utf-8")
+        self.logger.info(LogIcons.NOTE, f"Debug: XHTML 已存至 {dump_path.resolve()}")
+        # ────────────────────────────────────────────────────────────
+
         self.client.update_page_content(
             new_content,
             page_title,
             current_version
         )
-        
+
+        # 設定頁面為寬版（content property，與 body 分開）
+        page_width = self.config.get('confluence', {}).get('page_width', 'full-width')
+        self.client.set_page_appearance(page_width)
+
         self.logger.success(
             LogIcons.COMPLETE,
             f"Wiki 推送完成 (Ver: {current_version + 1})"

@@ -42,14 +42,19 @@ htmlcov/
 logs/
 *.log
 
-# 快取和狀態文件
+# 快取和狀態文件（多專案會產生 P1_sync_cache.json、P1_version_history.json 等）
+*_.sync_cache.json
+*_version_history.json
 .sync_cache.json
 version_history.json
 *.db
 
-# 配置（可能包含敏感資訊）
-config/*_production.yaml
-config/*_prod.yaml
+# 配置（只保留 base.yaml，其他專案設定檔排除）
+config/*.yaml
+!config/base.yaml
+
+# 壓縮檔
+*.zip
 
 # 臨時文件
 *.tmp
@@ -59,3 +64,6 @@ Thumbs.db
 
 # 資源資料夾（根據需求調整）
 art_assets/
+
+# Debug 輸出
+debug_last_content.html

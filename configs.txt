@@ -2,8 +2,8 @@
 # 每行一個配置文件路徑，# 開頭為註解
 
 # Slot Game 專案
-config/project_a.yaml
-config/project_b.yaml
+config/project_slot_a.yaml
+config/project_slot_b.yaml
 
 # 其他專案（未啟用）
 # config/project_c.yaml

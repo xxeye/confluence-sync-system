@@ -118,8 +118,7 @@ class SlotGameClassifier:
             
             if group_key:
                 # 多國語系或位圖數字（需要分組）
-                if group_key not in categories[category]:
-                    categories[category][group_key] = []
+                categories[category].setdefault(group_key, [])
                 categories[category][group_key].append(asset)
             else:
                 # 一般資源（直接列表）

@@ -117,10 +117,22 @@ class ConfluenceClient:
             auth=self.auth,
             timeout=self.timeout
         )
-        response.raise_for_status()
-        
+
+        if not response.ok:
+            # 印出 Confluence 回傳的詳細錯誤訊息，方便診斷 XHTML 問題
+            try:
+                err_detail = response.json()
+            except Exception:
+                err_detail = response.text[:2000]
+            raise requests.HTTPError(
+                f"{response.status_code} Error: {response.reason}\n"
+                f"Detail: {err_detail}",
+                response=response
+            )
+
         return True
     
+    @retry(max_attempts=3, delay=1, exceptions=(requests.RequestException,))
     def get_all_attachments(self) -> List[Dict[str, Any]]:
         """
         取得頁面所有附件的元數據
@@ -249,6 +261,67 @@ class ConfluenceClient:
             response.raise_for_status()
             return None
     
+    def set_page_appearance(self, appearance: str = "full-width") -> bool:
+        """
+        設定頁面寬度外觀（透過 content property API）
+
+        Confluence Cloud 的頁面寬度不在 body storage 裡，
+        必須透過獨立的 content property 端點設定。
+
+        appearance 可選值:
+            "full-width"  → UI 顯示為「寬版」/「全版」
+            "fixed-width" → UI 顯示為「窄版」（預設）
+
+        此方法會自動處理「首次建立」與「已存在時更新」兩種情況。
+        """
+        base = f"{self.base_url}/wiki/api/v2/pages/{self.page_id}/properties"
+
+        for key in ("content-appearance-draft", "content-appearance-published"):
+            # ① 先嘗試取得現有 property（確認是否已設定過）
+            get_resp = requests.get(
+                base,
+                auth=self.auth,
+                timeout=self.timeout
+            )
+            existing_id   = None
+            existing_ver  = None
+
+            if get_resp.status_code == 200:
+                for prop in get_resp.json().get("results", []):
+                    if prop.get("key") == key:
+                        existing_id  = prop.get("id")
+                        existing_ver = prop.get("version", {}).get("number", 1)
+                        break
+
+            if existing_id:
+                # ② 已存在 → PUT 更新
+                put_resp = requests.put(
+                    f"{base}/{existing_id}",
+                    json={
+                        "key": key,
+                        "value": appearance,
+                        "version": {"number": existing_ver + 1}
+                    },
+                    auth=self.auth,
+                    timeout=self.timeout
+                )
+                if put_resp.status_code not in (200, 204):
+                    self._log("warning", "⚠️",
+                              f"更新 {key} 失敗: {put_resp.status_code}")
+            else:
+                # ③ 不存在 → POST 建立
+                post_resp = requests.post(
+                    base,
+                    json={"key": key, "value": appearance},
+                    auth=self.auth,
+                    timeout=self.timeout
+                )
+                if post_resp.status_code not in (200, 201):
+                    self._log("warning", "⚠️",
+                              f"建立 {key} 失敗: {post_resp.status_code}")
+
+        return True
+
     def parse_history_from_page(
         self,
         xhtml: str,

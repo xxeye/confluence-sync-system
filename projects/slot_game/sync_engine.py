@@ -37,19 +37,20 @@ class SlotGameSyncEngine(BaseSyncEngine):
     def build_page_content(
         self,
         categories: Dict[str, Any],
-        history: List[Dict[str, str]]
+        history: List[Dict[str, str]],
     ) -> str:
         """
         建構頁面內容
-        
+
         Args:
             categories: 分類結果
-            history: 版本歷史
-        
+            history:    版本歷史
+
         Returns:
             XHTML 內容
         """
-        return self.page_builder.assemble(categories, history)
+        jira_filter_url = self.config.get('confluence', {}).get('jira_filter_url')
+        return self.page_builder.assemble(categories, history, jira_filter_url)
     
     def _update_history_only(self, current_xhtml: str) -> str:
         """

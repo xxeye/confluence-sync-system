@@ -10,7 +10,13 @@ confluence:
   page_id: "123456789"  # 目標頁面 ID
   email: "your-email@example.com"  # Confluence 帳號
   api_token: "${CONFLUENCE_TOKEN}"  # API Token，建議使用環境變數
-  user_account_id: "your-account-id"  # 使用者 Account ID（用於歷史記錄）
+  user_account_id: "your-account-id"  # 使用者 Account ID（用於版本更新說明的人員標註）
+
+  # Jira 篩選任務連結
+  # 在 Jira 的 Issues 頁面設定好篩選條件後，複製網址貼在這裡
+  # 頁面會顯示任務清單表格（索引鍵、摘要、受託人、狀態等）
+  # 若不需要顯示 Jira 任務，將此行刪除或留空即可
+  jira_filter_url: ""
 
 sync:
   target_folder: "./art_assets"  # 要監聽的本地資料夾
@@ -20,7 +26,7 @@ sync:
     delete: 1     # 刪除操作的並發執行緒數（建議保持 1）
     upload: 3     # 上傳操作的並發執行緒數
   history_keep: 5  # Confluence 頁面顯示的歷史版本數量
-  
+
 file_patterns:
   include:
     - "*.png"
