@@ -287,7 +287,6 @@ class BaseSyncEngine(ABC):
 
         排除規則（硬編碼）：
         1. 路徑中含有 spine 資料夾
-        2. 檔名含有 (1) — 代表雲端重複下載的副本
         """
         filename_lower = filename.lower()
 
@@ -297,10 +296,6 @@ class BaseSyncEngine(ABC):
             parts = os.path.normpath(file_path).split(os.sep)
             if any(p.lower() == 'spine' for p in parts):
                 return False
-
-        # 硬排除：檔名含 (1)（雲端同步錯誤副本）
-        if '(1)' in filename:
-            return False
 
         # 檢查包含模式
         include_patterns = self.file_patterns.get('include', ['*.png', '*.jpg', '*.jpeg'])
