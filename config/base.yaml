@@ -1,6 +1,3 @@
-# config/base.yaml 新增欄位範例
-# 將以下 notes_file 加入你的專案 config
-
 project:
   name: "MySlotGame"
   type: "slot_game"
@@ -12,19 +9,13 @@ confluence:
   api_token: "${CONFLUENCE_TOKEN}"
   user_account_id: "abc123"
 
-  # ── 新增：說明文件路徑 ────────────────────────────────────────
-  # 路徑填入 .xlsx 檔案的完整或相對路徑
-  # 與監聽資料夾同層，例如：
-  #   監聽資料夾：C:/Projects/99/
-  #   說明文件：  C:/Projects/asset_notes.xlsx
-  #
-  # 若不需要說明功能，可移除此行或設為空字串
-  notes_file: ".docs/asset_notes.xlsx"
+  # 說明文件路徑（與監聽資料夾同層，不存在時靜默略過）
+  notes_file: "C:/Projects/asset_notes.xlsx"
 
-  # （可選）Jira filter URL
-  jira_filter_url: "https://your-domain.atlassian.net/issues/?filter=12345"
+  # Jira filter URL（可選）
+  # jira_filter_url: "https://your-domain.atlassian.net/issues/?filter=12345"
 
-  # （可選）頁面寬度：full-width / fixed-width
+  # 頁面寬度：full-width / fixed-width
   page_width: "full-width"
 
 sync:
@@ -43,3 +34,10 @@ file_patterns:
 cache:
   remote_state_file: ".sync_cache.json"
   history_file: "version_history.json"
+
+# ── 驗證器設定 ────────────────────────────────────────────────
+# enabled 未填或 false → 停用，不影響同步與頁面渲染流程
+# dict_file 指向由 Google Sheets Apps Script 匯出的字典 yaml
+validator:
+  enabled: false
+  dict_file: "config/slot_game_dict.yaml"

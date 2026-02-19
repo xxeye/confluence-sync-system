@@ -1,14 +1,15 @@
 """
 Slot Game 同步引擎
-整合分類器、頁面建構器、說明文件載入器
+整合分類器、頁面建構器、說明文件載入器、檔名驗證器
 """
 
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
 
 from core import BaseSyncEngine
 from .classifier import SlotGameClassifier
 from .page_builder import SlotGamePageBuilder
+from .validator import DictLoader, FilenameValidator
 from utils.note_loader import NoteLoader
 
 
@@ -17,10 +18,10 @@ class SlotGameSyncEngine(BaseSyncEngine):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.classifier = SlotGameClassifier()
+        self.classifier   = SlotGameClassifier()
         self.page_builder = SlotGamePageBuilder()
 
-        # 載入說明文件（路徑從 config 讀取，不存在時靜默略過）
+        # ── 說明文件 ──────────────────────────────────────────
         notes_file = self.config.get('confluence', {}).get('notes_file')
         self.note_loader = NoteLoader(notes_file)
 
@@ -29,19 +30,30 @@ class SlotGameSyncEngine(BaseSyncEngine):
         else:
             self.logger.info("📄", "未設定說明文件或說明文件為空，說明欄位將留空")
 
+        # ── 驗證器 ────────────────────────────────────────────
+        self.validator: Optional[FilenameValidator] = None
+        validator_cfg = self.config.get('validator', {})
+
+        if validator_cfg.get('enabled', False):
+            dict_file = validator_cfg.get('dict_file')
+            if not dict_file:
+                self.logger.warning("⚠️", "validator.enabled=true 但未設定 dict_file，驗證器停用")
+            else:
+                try:
+                    loader         = DictLoader(dict_file)
+                    self.validator = FilenameValidator(loader)
+                    self.logger.info("🔍", f"檔名驗證器已啟用，字典：{dict_file}")
+                except FileNotFoundError as e:
+                    self.logger.warning("⚠️", f"字典檔不存在，驗證器停用：{e}")
+                except Exception as e:
+                    self.logger.warning("⚠️", f"驗證器初始化失敗，驗證器停用：{e}")
+        else:
+            self.logger.info("🔍", "檔名驗證器未啟用（validator.enabled=false）")
+
     def classify_assets(
         self,
         files: Dict[str, Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """
-        分類資源
-
-        Args:
-            files: 檔案字典 {filename: {path, hash, width, height, size}}
-
-        Returns:
-            分類後字典
-        """
         return self.classifier.organize_assets(files)
 
     def build_page_content(
@@ -49,55 +61,31 @@ class SlotGameSyncEngine(BaseSyncEngine):
         categories: Dict[str, Any],
         history: List[Dict[str, str]],
     ) -> str:
-        """
-        建構頁面內容
-
-        Args:
-            categories: 分類後資源
-            history:    更新歷史
-
-        Returns:
-            XHTML 內容字串
-        """
         jira_filter_url = self.config.get('confluence', {}).get('jira_filter_url')
-
-        # 將 NoteLoader 的說明對照表傳入 page_builder
-        notes = dict(self.note_loader._notes)
+        notes           = dict(self.note_loader._notes)
 
         return self.page_builder.assemble(
             categories,
             history,
             jira_filter_url,
             notes=notes,
+            validator=self.validator,   # None 時 page_builder 自動跳過驗證
         )
 
     def _update_history_only(self, current_xhtml: str) -> str:
-        """
-        僅更新歷史紀錄區塊
-
-        Args:
-            current_xhtml: 現有頁面 XHTML
-
-        Returns:
-            更新後 XHTML
-        """
-        soup = BeautifulSoup(current_xhtml, 'html.parser')
+        soup    = BeautifulSoup(current_xhtml, 'html.parser')
         h2_node = soup.find('h2', string=lambda s: s and '更新紀錄' in s)
 
         if h2_node:
-            # 找到舊的歷史表格，替換為新的
             new_history_table = self.page_builder._generate_history_table(
                 self.state.get_history_slice(self.history_keep)
             )
-
             old_table = h2_node.find_next('table')
             if old_table:
                 new_soup = BeautifulSoup(new_history_table, 'html.parser')
                 old_table.replace_with(new_soup.table)
-
             return str(soup)
         else:
-            # 找不到歷史區塊，重新產生完整頁面
             categories = self.classify_assets(self.state.remote_state)
             return self.build_page_content(
                 categories,
