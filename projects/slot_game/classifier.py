@@ -13,46 +13,31 @@ from typing import Dict, Any, Tuple, Optional
 class SlotGameClassifier:
     """Slot Game 資源分類器"""
 
-    # 多國語系白名單（languageBitmapFont 欄位為語系代碼時）
+    # 多國語系白名單
     LANG_WHITELIST = [
         'cn', 'cm', 'jp', 'kr', 'th', 'id', 'vn',
         'es', 'pt', 'tr', 'mm', 'bd', 'en'
     ]
 
+    # NU type 識別
+    NU_TYPE = 'nu'
+
     def classify(self, asset: Dict[str, Any]) -> Tuple[str, Optional[str]]:
         """
         分類單個資源
 
-        Args:
-            asset: 資源字典，包含 name, size, width, height 等
-
         Returns:
             (分類名稱, 群組鍵)
-            - 分類名稱: layout, main, free, loading,
-                       multi_main, multi_free, multi_loading,
-                       nu_main, nu_free, nu_loading
-            - 群組鍵: 多國語系與 NU 數字組使用，其他為 None
-
-        檔名解析範例：
-            base_nu_win_na_0.png
-              parts[0]=base  parts[1]=nu  parts[2]=win  parts[3]=na  parts[4]=0
-              → nu_main，group_key = "base_nu_win_na"（含 visualState）
-
-            base_text_paytableTitle_normal_cn.png
-              parts[0]=base  parts[1]=text  parts[2]=paytableTitle
-              parts[3]=normal  parts[4]=cn
-              → multi_main，group_key = "base_text_paytableTitle_normal"
         """
         filename = asset['name']
         parts = self._parse_filename(filename)
 
-        # 1. Layout 判斷（檔名含 layout 關鍵字）
+        # 1. Layout
         if 'layout' in filename.lower():
             return 'layout', None
 
-        # 需要至少 4 欄才能正確解析
+        # 欄位不足（< 4）→ 基本分類，警告由 validate_filename 另外提供
         if len(parts) < 4:
-            # 欄位不足，依 sceneModule 做基本分類，不分群組
             scene = parts[0].lower() if parts else ''
             if scene == 'free':
                 return 'free', None
@@ -61,18 +46,13 @@ class SlotGameClassifier:
             else:
                 return 'main', None
 
-        scene = parts[0].lower()  # sceneModule
-        # type = parts[1]
-        # name = parts[2]
-        # visualState = parts[3]
+        scene = parts[0].lower()
 
-        # 2. 多國語系判斷
-        #    條件：有第 5 欄（index 4）且值在語系白名單
-        #    group_key = sceneModule_type_name_visualState（前 4 欄）
+        # 2. 多國語系：index 4 在語系白名單
         if len(parts) >= 5:
             lang_tag = parts[4].lower()
             if lang_tag in self.LANG_WHITELIST:
-                group_key = "_".join(parts[:4])
+                group_key = '_'.join(parts[:4])
                 if scene == 'free':
                     return 'multi_free', group_key
                 elif scene == 'loading':
@@ -80,12 +60,9 @@ class SlotGameClassifier:
                 else:
                     return 'multi_main', group_key
 
-        # 3. 位圖數字（NU）判斷
-        #    條件：type（parts[1]）== 'nu'
-        #    group_key = sceneModule_type_name_visualState（前 4 欄，含 visualState）
-        #    ✅ 修正：舊版只取 parts[:3]，漏掉了 visualState（parts[3]）
-        if parts[1].lower() == 'nu':
-            group_key = "_".join(parts[:4])   # 含 visualState
+        # 3. NU 數字組：type == 'nu'
+        if parts[1].lower() == self.NU_TYPE:
+            group_key = '_'.join(parts[:4])   # 含 visualState
             if scene == 'free':
                 return 'nu_free', group_key
             elif scene == 'loading':
@@ -101,8 +78,62 @@ class SlotGameClassifier:
         else:
             return 'main', None
 
+    def validate_filename(self, filename: str) -> Optional[str]:
+        """
+        驗證檔名欄位數量，回傳警告訊息。
+
+        檢查三種異常：
+        1. 一般圖片欄位不足（parts < 4）
+           → 回傳 "⚠️ 欄位不足（只有 N 欄，需要 4 欄）"
+
+        2. 多國語系欄位不足：type 非 nu、非 layout，
+           且 parts[2] 或 parts[3] 本身是語系代碼
+           → 代表語系代碼位移，回傳 "⚠️ 疑似多國語系檔案，欄位不足"
+
+        3. NU 欄位不足：type == nu，但 parts < 5（缺 languageBitmapFont）
+           或 parts == 4（visualState 位置被數字佔據）
+           → 回傳 "⚠️ 疑似 NU 數字組檔案，欄位不足"
+
+        無問題則回傳 None。
+        """
+        parts = self._parse_filename(filename)
+
+        # Layout 不驗證
+        if 'layout' in filename.lower():
+            return None
+
+        # --- 情況 1：一般圖片欄位不足 ---
+        if len(parts) < 4:
+            # 先判斷是否可能是多國或 NU（讓情況 2/3 優先提示）
+            if len(parts) >= 2:
+                if parts[1].lower() == self.NU_TYPE:
+                    return '⚠️ 疑似 NU 數字組檔案，欄位不足'
+                # parts[2] 或 parts[3] 是語系代碼 → 多國位移
+                for i in range(2, min(len(parts), 4)):
+                    if parts[i].lower() in self.LANG_WHITELIST:
+                        return '⚠️ 疑似多國語系檔案，欄位不足'
+            return f'⚠️ 欄位不足（只有 {len(parts)} 欄，需要 4 欄）'
+
+        # --- 情況 2：多國語系欄位位移 ---
+        # 正常多國在 index 4；若 index 3 或 index 2 是語系代碼則代表缺欄
+        if parts[1].lower() != self.NU_TYPE:
+            # index 3 是語系代碼 → 缺 visualState
+            if parts[3].lower() in self.LANG_WHITELIST:
+                return '⚠️ 疑似多國語系檔案，欄位不足（語系代碼出現在第 4 欄，應在第 5 欄）'
+            # index 2 是語系代碼 → 缺 name + visualState
+            if len(parts) >= 3 and parts[2].lower() in self.LANG_WHITELIST:
+                return '⚠️ 疑似多國語系檔案，欄位不足（語系代碼出現在第 3 欄，應在第 5 欄）'
+
+        # --- 情況 3：NU 欄位不足 ---
+        if parts[1].lower() == self.NU_TYPE:
+            # 正常 NU 有 5 欄；只有 4 欄代表缺 languageBitmapFont 或 visualState
+            if len(parts) < 5:
+                return '⚠️ 疑似 NU 數字組檔案，欄位不足（需要 5 欄）'
+
+        return None
+
     def _parse_filename(self, filename: str) -> list:
-        """解析檔名為欄位列表（去除副檔名後用底線分割）"""
+        """解析檔名為欄位列表"""
         name_without_ext = filename
         for ext in ['.png', '.jpg', '.jpeg']:
             if filename.lower().endswith(ext):
@@ -115,13 +146,11 @@ class SlotGameClassifier:
         files: Dict[str, Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
-        將所有資源組織到分類結構
+        將所有資源組織到分類結構，同時附上驗證警告。
 
-        Args:
-            files: 檔案字典 {filename: {path, hash, width, height, size}}
-
-        Returns:
-            分類結果字典
+        asset 字典會新增 'warning' 欄位：
+            None      → 無問題
+            str       → 警告訊息，供 page_builder 渲染
         """
         categories = {
             'layout': [],
@@ -140,7 +169,8 @@ class SlotGameClassifier:
             asset = {
                 'name': filename,
                 'size': file_data['size'],
-                'orig_w': file_data['width']
+                'orig_w': file_data['width'],
+                'warning': self.validate_filename(filename),  # ← 新增警告欄位
             }
 
             category, group_key = self.classify(asset)
