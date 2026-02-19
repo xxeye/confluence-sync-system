@@ -37,6 +37,7 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+測試資料夾/
 
 # 日誌
 logs/
