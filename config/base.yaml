@@ -36,8 +36,10 @@ cache:
   history_file: "version_history.json"
 
 # ── 驗證器設定 ────────────────────────────────────────────────
+# 填入值為true、false
 # enabled 未填或 false → 停用，不影響同步與頁面渲染流程
 # dict_file 指向由 Google Sheets Apps Script 匯出的字典 yaml
 validator:
   enabled: false
-  dict_file: "config/slot_game_dict.yaml"
+  dict_file: "config/game_dict.yaml"
+  naming_doc_url: "https://..."

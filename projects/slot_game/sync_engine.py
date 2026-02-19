@@ -64,12 +64,15 @@ class SlotGameSyncEngine(BaseSyncEngine):
         jira_filter_url = self.config.get('confluence', {}).get('jira_filter_url')
         notes           = dict(self.note_loader._notes)
 
+        naming_doc_url = self.config.get('validator', {}).get('naming_doc_url')
+
         return self.page_builder.assemble(
             categories,
             history,
             jira_filter_url,
             notes=notes,
             validator=self.validator,   # None 時 page_builder 自動跳過驗證
+            naming_doc_url=naming_doc_url,
         )
 
     def _update_history_only(self, current_xhtml: str) -> str:
