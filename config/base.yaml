@@ -1,41 +1,44 @@
-# Confluence Sync System - 配置範本
-# 複製此檔案並重新命名為你的專案配置（如 project_a.yaml）
+# config/base.yaml 新增欄位範例
+# 將以下 notes_file 加入你的專案 config
 
 project:
-  name: "MyProject"  # 專案名稱，用於日誌識別
-  type: "slot_game"  # 專案類型，對應 projects/ 下的資料夾名稱
+  name: "MySlotGame"
+  type: "slot_game"
 
 confluence:
-  url: "https://your-domain.atlassian.net"  # Confluence 網域
-  page_id: "123456789"  # 目標頁面 ID
-  email: "your-email@example.com"  # Confluence 帳號
-  api_token: "${CONFLUENCE_TOKEN}"  # API Token，建議使用環境變數
-  user_account_id: "your-account-id"  # 使用者 Account ID（用於版本更新說明的人員標註）
+  url: "https://your-domain.atlassian.net"
+  page_id: "123456"
+  email: "your@email.com"
+  api_token: "${CONFLUENCE_TOKEN}"
+  user_account_id: "abc123"
 
-  # Jira 篩選任務連結
-  # 在 Jira 的 Issues 頁面設定好篩選條件後，複製網址貼在這裡
-  # 頁面會顯示任務清單表格（索引鍵、摘要、受託人、狀態等）
-  # 若不需要顯示 Jira 任務，將此行刪除或留空即可
-  jira_filter_url: ""
+  # ── 新增：說明文件路徑 ────────────────────────────────────────
+  # 路徑填入 .xlsx 檔案的完整或相對路徑
+  # 與監聽資料夾同層，例如：
+  #   監聽資料夾：C:/Projects/99/
+  #   說明文件：  C:/Projects/asset_notes.xlsx
+  #
+  # 若不需要說明功能，可移除此行或設為空字串
+  notes_file: ".docs/asset_notes.xlsx"
+
+  # （可選）Jira filter URL
+  jira_filter_url: "https://your-domain.atlassian.net/issues/?filter=12345"
+
+  # （可選）頁面寬度：full-width / fixed-width
+  page_width: "full-width"
 
 sync:
-  target_folder: "./art_assets"  # 要監聽的本地資料夾
-  watch_delay: 10  # 檔案變更後的防抖延遲（秒）
+  target_folder: "C:/Projects/99"
+  watch_delay: 10
   max_workers:
-    download: 15  # 下載與校驗的並發執行緒數
-    delete: 1     # 刪除操作的並發執行緒數（建議保持 1）
-    upload: 3     # 上傳操作的並發執行緒數
-  history_keep: 5  # Confluence 頁面顯示的歷史版本數量
+    download: 15
+    delete: 1
+    upload: 3
+  history_keep: 5
 
 file_patterns:
-  include:
-    - "*.png"
-    - "*.jpg"
-    - "*.jpeg"
-  exclude:
-    - "*_temp.*"
-    - "*_backup.*"
-    - "*.db"
+  include: ["*.png", "*.jpg", "*.jpeg"]
+  exclude: ["*_temp.*", "*_backup.*"]
 
 cache:
   remote_state_file: ".sync_cache.json"
