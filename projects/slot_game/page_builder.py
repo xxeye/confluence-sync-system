@@ -37,9 +37,52 @@ def _stem(filename: str) -> str:
     return Path(filename).stem
 
 
+def _note_for(filename: str, notes: Dict[str, str]) -> str:
+    """取得資產備註。
+
+    優先使用完整檔名，其次使用去副檔名（stem）對應。
+    這讓 notes 可以同時支援：
+      - btn_start.png  -> "..."
+      - btn_start      -> "..."（不含副檔名）
+    """
+    return notes.get(filename, notes.get(_stem(filename), ''))
+
+
 class SlotGamePageBuilder:
 
+    # 圖片在各區塊的顯示大小（ac:image 會依 Confluence 版面自動調整）
+    IMG = {
+        'layout': {'max_w': 200, 'max_h': 9999},
+        'normal': {'max_w': 120, 'max_h': 9999},
+        'multi':  {'max_w': 90,  'max_h': 9999},
+        'nu':     {'max_w': 60,  'max_h': 9999},
+        'warn':   {'max_w': 80,  'max_h': 60},
+    }
+
     @staticmethod
+    def _generate_page_summary_table(image_count: int, has_warnings: bool) -> str:
+        """
+        更新紀錄下方的頁面摘要（單欄表格）：
+        - 本頁面引用圖片數量
+        - 若有命名異常，顯示提醒
+        """
+        warn_line = (
+            '<p style="margin:6px 0 0 0;color:#e65100;font-weight:bold;font-size:12px;">'
+            '⚠️ 本次同步存在命名異常的元件，列表請見頁面最底部。'
+            '</p>'
+            if has_warnings else ''
+        )
+
+        return (
+            '<table><tbody><tr>'
+            '<td style="background:#f5f5f5;padding:8px 12px;">'
+            f'<p style="margin:0;font-weight:bold;font-size:12px;">'
+            f'📦 本頁面引用圖片數量：{image_count}（包含：各區塊素材 + 命名異常列表中的素材）'
+            '</p>'
+            f'{warn_line}'
+            '</td></tr></tbody></table>'
+        )
+
     @staticmethod
     def get_ac_image_tag(
         filename: str,
@@ -49,13 +92,10 @@ class SlotGamePageBuilder:
         max_h: int,
     ) -> str:
         """
-        產生 Confluence ac:image 標籤，強制固定儲存格高度。
+        產生 Confluence ac:image 標籤。
 
-        一律設定 ac:width + ac:height，讓 Confluence 統一縮放，
-        確保每列等高。計算邏輯：
-          - 等比例縮放到 max_w x max_h 範圍內
-          - 若原始尺寸小於限制，用原始尺寸（不放大，不模糊）
-          - 原始尺寸未知（0）時直接用 max_w x max_h
+        策略：只在「原始高度已知且超過 max_h」時，才設定 ac:width 進行等比例縮小。
+        其他情況不設尺寸，讓 Confluence 以原圖大小呈現（避免放大造成模糊）。
         """
         # 原始高度已知且超過 max_h → 等比例縮小並設 ac:width
         # 其他情況不設任何尺寸，讓 Confluence 自動顯示原始大小
@@ -98,6 +138,14 @@ class SlotGamePageBuilder:
             if asset['name'] not in warnings:
                 warnings[asset['name']] = ['⚠️ 命名不符合規範，無法自動分類']
 
+        # ── 在過濾前先建立 asset_map，確保 warned assets 的尺寸/size 資料不遺失 ──
+        pre_filter_asset_map: Dict[str, Dict] = {}
+        for asset in self._iter_all_assets(categories):
+            pre_filter_asset_map[asset['name']] = asset
+
+        # ✅ 新增：本頁面引用圖片數量（以「過濾前」為準，包含命名異常列表的圖）
+        image_count = len(pre_filter_asset_map)
+
         # ── 有警告的檔案從一般分類移除，統一在命名異常列表顯示 ──
         warned = set(warnings.keys())
         if warned:
@@ -116,93 +164,78 @@ class SlotGamePageBuilder:
                         if not categories[key][gk]:
                             del categories[key][gk]
 
-        body = ''
-        body += self._generate_history_table(history)
-        if warnings:
-            body += (
-                '<table><tbody><tr>'
-                '<td style="background:#f5f5f5;padding:8px 12px;">'
-                '<p style="margin:0;color:#e65100;font-weight:bold;font-size:12px;">'
-                '⚠️ 本次同步存在命名異常的元件，列表請見頁面最底部。'
-                '</p></td></tr></tbody></table>'
-            )
-        body += self._generate_top_toc()
+        body_parts: List[str] = []
+        body_parts.append(self._generate_history_table(history))
+
+        # ✅ 合併：資產數量 + 命名異常提醒（同一個單欄表格）
+        body_parts.append(self._generate_page_summary_table(image_count, has_warnings=bool(warnings)))
+        body_parts.append(self._generate_top_toc())
 
         if jira_filter_url:
-            body += self._generate_jira_block(jira_filter_url)
+            body_parts.append(self._generate_jira_block(jira_filter_url))
 
-        body += self._generate_layout_grid(categories['layout'], notes)
+        body_parts.append(self._generate_layout_grid(categories.get('layout', []), notes))
 
-        body += self._generate_normal_table(
+        body_parts.append(self._generate_normal_table(
             '🎰 2. 主遊戲 (Main Game) 素材列表',
-            categories['main'], notes, validator,
-        )
-        body += self._generate_multi_grid(
+            categories.get('main', []), notes, validator,
+        ))
+        body_parts.append(self._generate_multi_grid(
             '🌐 主遊戲—多國語系版',
-            categories['multi_main'], notes, validator,
-        )
-        body += self._generate_nu_grid(
+            categories.get('multi_main', {}), notes, validator,
+        ))
+        body_parts.append(self._generate_nu_grid(
             '🔢 主遊戲—數字組 (NU)',
-            categories['nu_main'], notes, validator,
-        )
+            categories.get('nu_main', {}), notes, validator,
+        ))
 
-        body += self._generate_normal_table(
+        body_parts.append(self._generate_normal_table(
             '🎁 3. 免費遊戲 (Free Game) 素材列表',
-            categories['free'], notes, validator,
-        )
-        body += self._generate_multi_grid(
+            categories.get('free', []), notes, validator,
+        ))
+        body_parts.append(self._generate_multi_grid(
             '🌐 免費遊戲—多國語系版',
-            categories['multi_free'], notes, validator,
-        )
-        body += self._generate_nu_grid(
+            categories.get('multi_free', {}), notes, validator,
+        ))
+        body_parts.append(self._generate_nu_grid(
             '🔢 免費遊戲—數字組 (NU)',
-            categories['nu_free'], notes, validator,
-        )
+            categories.get('nu_free', {}), notes, validator,
+        ))
 
-        body += self._generate_normal_table(
+        body_parts.append(self._generate_normal_table(
             '⏳ 4. 載入畫面 (Loading) 素材列表',
-            categories['loading'], notes, validator,
-        )
-        body += self._generate_multi_grid(
+            categories.get('loading', []), notes, validator,
+        ))
+        body_parts.append(self._generate_multi_grid(
             '🌐 載入畫面—多國語系版',
-            categories['multi_loading'], notes, validator,
-        )
-        body += self._generate_nu_grid(
+            categories.get('multi_loading', {}), notes, validator,
+        ))
+        body_parts.append(self._generate_nu_grid(
             '🔢 載入畫面—數字組 (NU)',
-            categories['nu_loading'], notes, validator,
-        )
+            categories.get('nu_loading', {}), notes, validator,
+        ))
 
         # 命名異常列表移至最後
         if warnings:
-            body += self._generate_warning_summary(warnings, naming_doc_url, categories, notes)
+            body_parts.append(self._generate_warning_summary(warnings, naming_doc_url, pre_filter_asset_map, notes))
 
-        return body
+        return ''.join(body_parts)
 
     # ── 頂部命名錯誤彙總 ──────────────────────────────────────
     def _generate_warning_summary(
         self,
         warnings: Dict[str, List[str]],
         naming_doc_url: Optional[str],
-        categories: Dict[str, Any],
+        asset_map: Dict[str, Dict],
         notes: Optional[Dict[str, str]] = None,
     ) -> str:
         """
         命名異常列表，放在頁面最後。
-        每檔一列：圖片 | 檔名＋違規規則 | 尺寸 | 備註（同 notes）
+        每檔一列：圖片 | 檔名＋違規規則 | 尺寸 | 說明（同 notes）
+        asset_map 須在過濾前建立，確保 warned assets 的資料完整。
         """
         if notes is None:
             notes = {}
-
-        def _stem(filename: str) -> str:
-            for ext in ('.png', '.jpg', '.jpeg'):
-                if filename.lower().endswith(ext):
-                    return filename[:-len(ext)]
-            return filename
-
-        # ── 建立 filename → asset 對照表 ──────────────────────
-        asset_map: Dict[str, Dict] = {}
-        for asset in self._iter_all_assets(categories):
-            asset_map[asset['name']] = asset
 
         # ── 標題 ──────────────────────────────────────────────
         link_html = ''
@@ -222,7 +255,7 @@ class SlotGamePageBuilder:
 
         rows = ''
         for fn, msgs in sorted(warnings.items()):
-            asset   = asset_map.get(fn, {'name': fn, 'orig_w': 0, 'orig_h': 0})
+            asset   = asset_map.get(fn, {'name': fn, 'size': '-', 'orig_w': 0, 'orig_h': 0})
             ow      = asset.get('orig_w', 0)
             oh      = asset.get('orig_h', 0)
             multi   = len(msgs) > 1
@@ -231,17 +264,17 @@ class SlotGamePageBuilder:
             # 圖片欄
             img_cell = (
                 f'<td style="{td};text-align:center;">' +
-                self.get_ac_image_tag(fn, ow, oh, max_w=80, max_h=60) +
+                self.get_ac_image_tag(fn, ow, oh, **self.IMG['warn']) +
                 '</td>'
             )
 
             # 檔名＋違規規則欄
             rules_html = ''
             for msg in msgs:
-                clean_msg  = msg.lstrip('⚠️').strip()
+                # 保留 ⚠️ emoji，文字改為橘色（與觸犯兩條規則的橘色相同）
                 rules_html += (
-                    f'<p style="margin:2px 0;font-size:10px;color:#bf360c;">' +
-                    _escape_xml(clean_msg) + '</p>'
+                    f'<p style="margin:2px 0;font-size:10px;color:#e65100;font-weight:bold;">' +
+                    _escape_xml(msg) + '</p>'
                 )
             name_cell = (
                 f'<td style="{td}">' +
@@ -249,12 +282,12 @@ class SlotGamePageBuilder:
                 rules_html + '</td>'
             )
 
-            # 尺寸欄
-            size_str  = f'{ow} x {oh}' if ow and oh else '-'
-            size_cell = f'<td style="{td};white-space:nowrap;">{size_str}</td>'
+            # 尺寸欄（與主遊戲/免費遊戲素材列表一致，顯示檔案大小）
+            size_val  = asset.get('size', '-') or '-'
+            size_cell = f'<td style="{td};white-space:nowrap;">{_escape_xml(str(size_val))}</td>'
 
-            # 備註欄（同 notes）
-            note      = notes.get(fn, notes.get(_stem(fn), ''))
+            # 說明欄（同 notes）
+            note      = _note_for(fn, notes)
             note_cell = f'<td style="{td}">{_escape_xml(note)}</td>'
 
             rows += f'<tr>{img_cell}{name_cell}{size_cell}{note_cell}</tr>'
@@ -265,7 +298,7 @@ class SlotGamePageBuilder:
             f'<th style="{th}">圖片</th>'
             f'<th style="{th}">檔名</th>'
             f'<th style="{th}">尺寸</th>'
-            f'<th style="{th}">備註</th>'
+            f'<th style="{th}">說明</th>'
             f'</tr></thead>'
             f'<tbody>{rows}</tbody>'
             f'</table>'
@@ -370,14 +403,14 @@ class SlotGamePageBuilder:
 
             xhtml += '<tr>'
             for a in chunk:
-                xhtml += f"<td>{self.get_ac_image_tag(a['name'], a.get('orig_w',0), a.get('orig_h',0), max_w=200, max_h=9999)}</td>"
+                xhtml += f"<td>{self.get_ac_image_tag(a['name'], a.get('orig_w',0), a.get('orig_h',0), **self.IMG['layout'])}</td>"
             xhtml += '<td></td>' * pad + '</tr>'
 
-            has_notes = any(notes.get(a['name'], notes.get(_stem(a['name']), '')) for a in chunk)
+            has_notes = any(_note_for(a['name'], notes) for a in chunk)
             if has_notes:
                 xhtml += '<tr>'
                 for a in chunk:
-                    note = notes.get(a['name'], notes.get(_stem(a['name']), ''))
+                    note = _note_for(a['name'], notes)
                     xhtml += f"<td style='font-size:11px;color:#555;'>{_escape_xml(note)}</td>"
                 xhtml += '<td></td>' * pad + '</tr>'
 
@@ -400,7 +433,7 @@ class SlotGamePageBuilder:
             '</thead><tbody>'
         )
         for asset in sorted(assets, key=lambda x: x['name']):
-            note    = notes.get(asset['name'], notes.get(_stem(asset['name']), ''))
+            note      = _note_for(asset['name'], notes)
             all_warns = validator.validate_all(asset['name']) if validator else []
             warning   = all_warns[0] if all_warns else None
 
@@ -422,7 +455,7 @@ class SlotGamePageBuilder:
 
             xhtml += (
                 f'<tr>'
-                f"<td>{self.get_ac_image_tag(asset['name'], asset.get('orig_w',0), asset.get('orig_h',0), max_w=120, max_h=9999)}</td>"
+                f"<td>{self.get_ac_image_tag(asset['name'], asset.get('orig_w',0), asset.get('orig_h',0), **self.IMG['normal'])}</td>"
                 f'{name_cell}'
                 f"<td>{asset['size']}</td>"
                 f'<td>{_escape_xml(note)}</td>'
@@ -462,7 +495,9 @@ class SlotGamePageBuilder:
                 f'群組：{_escape_xml(group_key)}_{{language}}</p>'
             )
             if group_warn:
-                xhtml += (f'<p style="margin:2px 0 6px 0;">'f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'f' {_escape_xml(group_warn)}</span></p>')
+                xhtml += (f'<p style="margin:2px 0 6px 0;">'
+                          f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'
+                          f' {_escape_xml(group_warn)}</span></p>')
 
             xhtml += (
                 f'<table><tbody>'
@@ -484,7 +519,7 @@ class SlotGamePageBuilder:
 
                 xhtml += '<tr>'
                 for a in chunk:
-                    xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a.get('orig_w',0), a.get('orig_h',0), max_w=90, max_h=9999)}</td>"
+                    xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a.get('orig_w',0), a.get('orig_h',0), **self.IMG['multi'])}</td>"
                 xhtml += '<td></td>' * pad + '</tr>'
 
                 xhtml += '<tr>'
@@ -517,7 +552,9 @@ class SlotGamePageBuilder:
 
             xhtml += f'<h4>{_escape_xml(group_key)}</h4>'
             if group_warn:
-                xhtml += (f'<p style="margin:2px 0 6px 0;">'f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'f'{_escape_xml(group_warn)}</span></p>')
+                xhtml += (f'<p style="margin:2px 0 6px 0;">'
+                          f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'
+                          f'{_escape_xml(group_warn)}</span></p>')
 
             xhtml += (
                 f'<table><tbody>'
@@ -538,7 +575,7 @@ class SlotGamePageBuilder:
 
                 xhtml += '<tr>'
                 for a in chunk:
-                    xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a.get('orig_w',0), a.get('orig_h',0), max_w=60, max_h=9999)}</td>"
+                    xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a.get('orig_w',0), a.get('orig_h',0), **self.IMG['nu'])}</td>"
                 xhtml += '<td></td>' * pad + '</tr>'
 
                 xhtml += '<tr>'
@@ -560,4 +597,3 @@ class SlotGamePageBuilder:
             elif isinstance(v, dict):
                 for group in v.values():
                     yield from group
-
