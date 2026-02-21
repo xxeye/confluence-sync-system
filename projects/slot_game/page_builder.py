@@ -331,10 +331,10 @@ class SlotGamePageBuilder:
         )
         for asset in sorted(assets, key=lambda x: x['name']):
             note    = notes.get(asset['name'], notes.get(_stem(asset['name']), ''))
-            warning = validator.validate(asset['name']) if validator else None
+            all_warns = validator.validate_all(asset['name']) if validator else []
+            warning   = all_warns[0] if all_warns else None
 
             if warning:
-                all_warns = validator.validate_all(asset['name']) if validator else [warning]
                 extra = len(all_warns) - 1
                 extra_html = (
                     f' <span style="color:#e65100;font-weight:bold;">+{extra}</span>'
@@ -392,7 +392,7 @@ class SlotGamePageBuilder:
                 f'群組：{_escape_xml(group_key)}_{{language}}</p>'
             )
             if group_warn:
-                xhtml += (f'<p style="margin:2px 0 6px 0;">'f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'f'⚠️ {_escape_xml(group_warn)}</span></p>')
+                xhtml += (f'<p style="margin:2px 0 6px 0;">'f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'f' {_escape_xml(group_warn)}</span></p>')
 
             xhtml += (
                 f'<table><tbody>'

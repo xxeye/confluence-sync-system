@@ -18,8 +18,9 @@ class SlotGameSyncEngine(BaseSyncEngine):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.classifier   = SlotGameClassifier()
         self.page_builder = SlotGamePageBuilder()
+        # classifier 暫時用預設 lang_codes，待 validator 初始化後更新
+        self.classifier   = SlotGameClassifier()
 
         # ── 說明文件 ──────────────────────────────────────────
         notes_file = self.config.get('confluence', {}).get('notes_file')
@@ -42,6 +43,8 @@ class SlotGameSyncEngine(BaseSyncEngine):
                 try:
                     loader         = DictLoader(dict_file)
                     self.validator = FilenameValidator(loader)
+                    # 讓 classifier 使用與 validator 相同的語系集合，避免兩邊不同步
+                    self.classifier = SlotGameClassifier(lang_codes=loader.language)
                     self.logger.info("🔍", f"檔名驗證器已啟用，字典：{dict_file}")
                 except FileNotFoundError as e:
                     self.logger.warning("⚠️", f"字典檔不存在，驗證器停用：{e}")
@@ -94,3 +97,4 @@ class SlotGameSyncEngine(BaseSyncEngine):
                 categories,
                 self.state.get_history_slice(self.history_keep)
             )
+

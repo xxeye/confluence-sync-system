@@ -229,12 +229,12 @@ class FilenameValidator:
     def _rule2_underscore(*fields: str) -> Optional[str]:
         for f in fields:
             if f and '_' in f:
-                return '⚠️ 格式錯誤：各區塊內不得包含底線 [_] 符號'
+                return '⚠️ 格式錯誤：各欄位內不得包含底線 [_] 符號'
         return None
 
     def _rule3_name_duplicate(self, name: str) -> Optional[str]:
         if name in self.d.reserved_names:
-            return '⚠️ [命名] 不可與其他區塊已定義字詞重複'
+            return '⚠️ [命名] 不可與其他欄位已定義字詞重複'
         return None
 
     def _rule4_forbidden(self, name: str) -> Optional[str]:
