@@ -38,10 +38,13 @@ class DummyEngine:
         self.calls = []
         self.on_run = on_run
 
-    def run_sync(self, is_startup=False, log_reason="Sync", dry_run=False):
+    def run_sync(self, is_startup=False, log_reason="Sync", dry_run=False, notes_dirty=False):
         self.calls.append((is_startup, log_reason, dry_run))
         if self.on_run:
             self.on_run()
+
+    def run_notes_only_sync(self, log_reason="Notes Update"):
+        pass
 
 
 class FakeTimer:

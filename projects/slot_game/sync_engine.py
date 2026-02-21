@@ -68,6 +68,8 @@ class SlotGameSyncEngine(BaseSyncEngine):
         categories: Dict[str, Any],
         history: List[Dict[str, str]],
     ) -> str:
+        # 每次組頁前重新讀取 xlsx，確保監聽模式下說明文件改動即時生效
+        self.note_loader.reload()
         jira_filter_url = self.config.get('confluence', {}).get('jira_filter_url')
         notes           = self.note_loader.as_dict()
 

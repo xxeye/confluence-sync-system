@@ -106,19 +106,23 @@ class ProjectInstance:
             'include', ['*.png', '*.jpg', '*.jpeg']
         )
         watch_delay = self.config['sync']['watch_delay']
-        
+
+        # 若 config 有設定 notes_file（xlsx 說明文件），一併監聽其儲存事件
+        notes_file = self.config.get('confluence', {}).get('notes_file')
+        extra_files = [notes_file] if notes_file else []
+
         self.monitor = FileMonitor(
             watch_path=self.config['sync']['target_folder'],
             file_patterns=file_patterns,
             callback=self._on_file_change,
-            delay=watch_delay
+            delay=watch_delay,
+            extra_files=extra_files,
         )
-        
+
         self.monitor.start()
-        self.logger.info(
-            LogIcons.WATCH,
-            f"[{self.project_id}] 監控已啟動"
-        )
+
+        suffix = f"（含說明文件：{notes_file}）" if notes_file else ""
+        self.logger.info(LogIcons.WATCH, f"[{self.project_id}] 監控已啟動{suffix}")
     
     def stop_monitoring(self) -> None:
         """停止檔案監聽（含 dirty timer 的安全收尾）"""
@@ -149,34 +153,32 @@ class ProjectInstance:
         if hasattr(self, "_dirty"):
             self._dirty = False
     
-    def _on_file_change(self) -> None:
+    def _on_file_change(self, notes_dirty: bool = False) -> None:
         """
-        Dirty + 合併觸發（A 方案）：
-        - 任何檔案事件只標記 dirty
+        Dirty + 合併觸發：
+        - 圖片或 xlsx 事件進來只標記 dirty / notes_dirty
         - 用 Timer 合併一波事件（避免連續觸發）
-        - 若同步中拿不到 lock，不跳過，改為延後重試
-        - 同步期間又有事件，結束後會自動補跑下一輪
+        - 若同步中拿不到 lock，延後重試
+        - 同步期間又有事件，結束後自動補跑下一輪
+        - notes_dirty 只升不降：圖片事件不會清掉已標記的 notes_dirty
         """
         import threading
         import time
 
-        # ---- lazy init: 不用改 __init__，首次觸發時補齊狀態 ----
+        # ---- lazy init ----
         if not hasattr(self, "_dirty"):
             self._dirty = False
+        if not hasattr(self, "_notes_dirty"):
+            self._notes_dirty = False
         if not hasattr(self, "_dirty_lock"):
             self._dirty_lock = threading.Lock()
         if not hasattr(self, "_dirty_timer"):
             self._dirty_timer = None
 
-        # 合併視窗：把短時間內的多個事件合成一次同步
-        # 建議值：0.8 ~ 2.0 秒（你也可以改成讀 config）
         MERGE_WINDOW_S = 1.2
-
-        # 拿不到 lock 時的重試間隔（避免忙等）
         RETRY_S = 1.0
 
         def _arm_timer(delay_s: float) -> None:
-            """啟動/重設一次性 timer（只保留最後一次）"""
             with self._dirty_lock:
                 if self._dirty_timer:
                     try:
@@ -184,28 +186,17 @@ class ProjectInstance:
                     except Exception:
                         pass
                     self._dirty_timer = None
-
                 t = threading.Timer(delay_s, _drain_dirty)
                 t.daemon = True
                 self._dirty_timer = t
                 t.start()
 
         def _drain_dirty() -> None:
-            """
-            嘗試把 dirty 狀態「排乾」：
-            - 若沒 dirty：直接返回
-            - 若 lock 被占用：延後重試
-            - 若成功同步：若同步期間又 dirty，立刻再排一次
-            """
-            # 先快速確認還需要跑嗎
             with self._dirty_lock:
                 if not self._dirty:
-                    return  # 已經乾淨了
-                # 先不在這裡清掉 dirty；等真的拿到 lock 並準備跑 sync 再清
+                    return
 
-            # 嘗試取得同步鎖（避免重入）
             if not self.sync_lock.acquire(blocking=False):
-                # 不跳過！延後再試
                 self.logger.info(
                     LogIcons.NOTE,
                     f"[{self.project_id}] 正在同步中，已標記 dirty，{RETRY_S:.1f}s 後重試"
@@ -214,9 +205,11 @@ class ProjectInstance:
                 return
 
             try:
-                # 真正開始同步前，清掉 dirty
+                # 讀走兩個 flag，同時清零
                 with self._dirty_lock:
                     self._dirty = False
+                    current_notes_dirty = self._notes_dirty
+                    self._notes_dirty = False
 
                 self.logger.info(
                     LogIcons.PROGRESS,
@@ -224,7 +217,8 @@ class ProjectInstance:
                 )
                 self.engine.run_sync(
                     is_startup=False,
-                    log_reason="Watcher Sync (dirty)"
+                    log_reason="Watcher Sync (dirty)",
+                    notes_dirty=current_notes_dirty,
                 )
 
             except Exception as e:
@@ -233,7 +227,6 @@ class ProjectInstance:
                     f"[{self.project_id}] 同步失敗: {e}",
                     exc_info=e
                 )
-                # 失敗時也別卡死：稍後再試（避免瞬間連續噴錯）
                 with self._dirty_lock:
                     self._dirty = True
                 _arm_timer(RETRY_S)
@@ -241,7 +234,6 @@ class ProjectInstance:
             finally:
                 self.sync_lock.release()
 
-                # 如果同步期間又有事件把 dirty 變回 True，就補跑下一輪
                 with self._dirty_lock:
                     needs_more = self._dirty
 
@@ -252,9 +244,11 @@ class ProjectInstance:
                     )
                     _arm_timer(MERGE_WINDOW_S)
 
-        # ---- 事件進來：只標記 dirty，並重設合併 timer ----
+        # ---- 事件進來：標記 dirty，notes_dirty 只升不降 ----
         with self._dirty_lock:
             self._dirty = True
+            if notes_dirty:
+                self._notes_dirty = True
 
         _arm_timer(MERGE_WINDOW_S)
 

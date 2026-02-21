@@ -114,15 +114,18 @@ class BaseSyncEngine(ABC):
         self,
         is_startup: bool = False,
         log_reason: str = "Sync",
-        dry_run: bool = False
+        dry_run: bool = False,
+        notes_dirty: bool = False,
     ) -> None:
         """
         執行同步（核心流程）
-        
+
         Args:
-            is_startup: 是否為啟動同步
-            log_reason: 日誌原因
-            dry_run: 是否為模擬執行（不實際修改）
+            is_startup:   是否為啟動同步
+            log_reason:   日誌原因
+            dry_run:      是否為模擬執行（不實際修改）
+            notes_dirty:  xlsx 說明文件是否在本輪事件中被更新。
+                          True 時即使圖片無變更也會重新組頁。
         """
         try:
             # 1. 取得遠端狀態
@@ -131,44 +134,92 @@ class BaseSyncEngine(ABC):
                 remote_state = self._full_cloud_sync()
             else:
                 remote_state = self.state.remote_state
-            
+
             # 2. 掃描本地檔案
             self.logger.info(LogIcons.PROGRESS, "掃描本地資源...")
             local_state = self._scan_local_files()
-            
+
             # 3. 計算差異
             diff = self._calculate_diff(local_state, remote_state)
-            
-            if not diff.has_changes() and not is_startup:
+
+            no_img_change = not diff.has_changes() and not is_startup
+            if no_img_change and not notes_dirty:
                 self.logger.info(LogIcons.COMPLETE, "無變更，跳過同步")
                 return
-            
-            self.logger.info(
-                LogIcons.PROGRESS,
-                f"變更統計: {diff.summary()}"
-            )
-            
+
+            if no_img_change and notes_dirty:
+                # 圖片沒動，只有說明文件更新 → 直接走輕量路徑
+                self.logger.info(LogIcons.NOTE, "說明文件已更新，重新組頁中...")
+                self.run_notes_only_sync(log_reason="Notes Update")
+                return
+
+            self.logger.info(LogIcons.PROGRESS, f"變更統計: {diff.summary()}")
+            if notes_dirty:
+                self.logger.info(LogIcons.NOTE, "（本輪同時包含說明文件更新）")
+
             if dry_run:
                 self.logger.info(LogIcons.WARNING, "Dry-run 模式：僅預覽，不實際執行")
                 self._print_diff_details(diff, local_state)
                 return
-            
+
             # 4. 執行物理操作
             self._execute_operations(diff, local_state, remote_state)
-            
-            # 5. 更新頁面內容
-            needs_redraw = diff.has_changes() or is_startup
+
+            # 5. 更新頁面內容（notes_dirty 時強制全量重繪，確保說明同步）
+            needs_redraw = diff.has_changes() or is_startup or notes_dirty
             self._update_page(local_state, diff, log_reason, needs_redraw)
-            
+
             # 6. 儲存狀態
             self.state.save()
-            
+
             self.logger.success(LogIcons.COMPLETE, "同步完成")
-            
+
         except Exception as e:
             self.logger.error(LogIcons.ERROR, f"同步失敗: {e}", exc_info=e)
             raise
     
+
+    def run_notes_only_sync(self, log_reason: str = "Notes Update") -> None:
+        """
+        僅重新組頁並推送，不做任何圖片上傳/刪除。
+        適用於只修改說明文件（xlsx）而圖片沒有變動的情況。
+
+        用 local_state 而非 remote_state 來分類，因為只有 local 有 width/height 資料。
+        """
+        try:
+            self.logger.info(LogIcons.NOTE, "說明文件更新，重新組頁中...")
+
+            # 掃描本地取得含尺寸的完整 file_data
+            local_state = self._scan_local_files()
+
+            _, current_version = self.client.get_page_content()
+
+            categories = self.classify_assets(local_state)
+
+            self.state.add_history_entry(
+                f"{log_reason} (+0 ~0 -0)",
+                self.user_id,
+                self.history_keep
+            )
+
+            new_content = self.build_page_content(
+                categories,
+                self.state.get_history_slice(self.history_keep)
+            )
+
+            page_title = f"美術資源清單_{self.project_name}"
+            self.client.update_page_content(new_content, page_title, current_version)
+            self.state.save()
+
+            self.logger.success(
+                LogIcons.COMPLETE,
+                f"說明文件推送完成 (Ver: {current_version + 1})"
+            )
+
+        except Exception as e:
+            self.logger.error(LogIcons.ERROR, f"說明文件同步失敗: {e}", exc_info=e)
+            raise
+
     def _full_cloud_sync(self) -> Dict[str, Dict[str, Any]]:
         """完整雲端同步（並發下載與校驗）"""
         import time
@@ -600,5 +651,6 @@ class BaseSyncEngine(ABC):
                 self.logger.info("  ", f"  - {filename}")
             if len(diff.to_delete) > 10:
                 self.logger.info("  ", f"  ... 還有 {len(diff.to_delete) - 10} 個")
+
 
 

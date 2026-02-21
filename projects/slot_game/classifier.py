@@ -78,23 +78,24 @@ class SlotGameClassifier:
         if 'layout' in filename.lower():
             return 'layout', None
 
-        # 2. 欄位不足 → unknown
+        # 2. 欄位不足 → 退化為 scene 分類（classifier 不做驗證，由 validator 負責標記）
         if len(parts) < 4:
-            return 'unknown', None
+            scene = parts[0].lower() if parts else 'base'
+            return self._scene_suffix(scene), None
 
         scene = parts[0].lower()
 
-        # 3. sceneModule 驗證（有傳入字典時才驗證）
+        # 3. sceneModule 驗證（有傳入字典時才驗證，不符合退化為 main 讓 validator 標記）
         if self._scene_modules is not None and scene not in self._scene_modules:
-            return 'unknown', None
+            return 'unknown', None  # sceneModule 完全不認識才是 unknown
 
         # 4. NU 數字組（嚴格）：type=nu 且第 5 欄在 bitmap_font
         if parts[1].lower() == _NU_TYPE:
             if len(parts) >= 5 and parts[4] in self._bitmap_font_digits:
                 group_key = '_'.join(parts[:4])
                 return f'nu_{self._scene_suffix(scene)}', group_key
-            # type=nu 但不符合 NU 規範 → unknown
-            return 'unknown', None
+            # type=nu 但不符合 NU 規範 → 退化為 scene 分類（由 validator 標記異常）
+            return self._scene_suffix(scene), None
 
         # 5. 多國語系：第 5 欄在 language
         if len(parts) >= 5 and parts[4].lower() in self._lang_codes:
@@ -105,8 +106,8 @@ class SlotGameClassifier:
         if len(parts) == 4:
             return self._scene_suffix(scene), None
 
-        # 7. 其他（5 欄但第 5 欄既不是語系也不是數字）→ unknown
-        return 'unknown', None
+        # 7. 其他（5 欄但第 5 欄既不是語系也不是數字）→ 退化為一般資源（由 validator 標記）
+        return self._scene_suffix(scene), None
 
     def organize_assets(
         self,
@@ -158,3 +159,4 @@ class SlotGameClassifier:
         if scene == 'free':    return 'free'
         if scene == 'loading': return 'loading'
         return 'main'
+

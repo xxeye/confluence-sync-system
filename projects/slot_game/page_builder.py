@@ -492,7 +492,7 @@ class SlotGamePageBuilder:
 
             xhtml += (
                 f'<p style="font-size:16px;font-weight:bold;margin-top:20px;">'
-                f'群組：{_escape_xml(group_key)}_{{language}}</p>'
+                f'群組：{_escape_xml(group_key)}</p>'
             )
             if group_warn:
                 xhtml += (f'<p style="margin:2px 0 6px 0;">'
