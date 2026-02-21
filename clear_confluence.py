@@ -30,45 +30,7 @@ from utils.logger import SyncLogger, LogIcons
 _EMPTY_PAGE_XHTML = '<p></p>'
 
 
-# ── 配置讀取 ───────────────────────────────────────────────────────────────────
 
-def _load_config_paths(args) -> List[str]:
-    """從 --configs 或 --config-list 讀取配置路徑清單"""
-    paths = []
-
-    if args.configs:
-        paths = args.configs
-    elif args.config_list:
-        list_file = Path(args.config_list)
-        if not list_file.exists():
-            print(f"❌ 配置清單不存在：{args.config_list}")
-            sys.exit(1)
-        for line in list_file.read_text(encoding='utf-8').splitlines():
-            line = line.strip()
-            if line and not line.startswith('#'):
-                paths.append(line)
-    else:
-        # 預設嘗試 configs.txt
-        default = Path('configs.txt')
-        if default.exists():
-            for line in default.read_text(encoding='utf-8').splitlines():
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    paths.append(line)
-        if not paths:
-            print("❌ 找不到配置，請使用 --configs 或 --config-list 指定")
-            sys.exit(1)
-
-    valid = [p for p in paths if Path(p).exists()]
-    skipped = set(paths) - set(valid)
-    for p in skipped:
-        print(f"⚠️  跳過不存在的配置：{p}")
-
-    if not valid:
-        print("❌ 沒有有效的配置文件")
-        sys.exit(1)
-
-    return valid
 
 
 def _build_client(config: Dict[str, Any], logger: SyncLogger) -> ConfluenceClient:
@@ -305,7 +267,10 @@ def main():
     print("=" * 50)
 
     # 載入所有專案配置
-    config_paths = _load_config_paths(args)
+    config_paths = ConfigLoader.load_config_paths(
+        configs=args.configs,
+        config_list=args.config_list,
+    )
     projects = []
     for path in config_paths:
         try:
@@ -347,3 +312,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

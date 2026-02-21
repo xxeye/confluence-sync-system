@@ -7,7 +7,7 @@ import os
 import re
 import yaml
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 
 class ConfigLoader:
@@ -103,6 +103,57 @@ class ConfigLoader:
                 raise ValueError(f"配置缺少必要欄位: {field_path}")
     
     @staticmethod
+    def load_config_paths(
+        configs: Optional[List[str]] = None,
+        config_list: Optional[str] = None,
+        default_list: str = 'configs.txt',
+    ) -> List[str]:
+        """
+        從三種來源之一收集有效配置路徑：
+          1. configs     — 直接傳入的路徑列表（對應 --configs）
+          2. config_list — 清單檔路徑（對應 --config-list）
+          3. default_list — 以上皆無時嘗試的預設清單檔（configs.txt）
+
+        Returns:
+            存在的配置路徑列表（不存在的路徑會被過濾並印出警告）
+
+        Raises:
+            SystemExit: 找不到任何有效配置時
+        """
+        import sys
+
+        def _read_list_file(path: str) -> List[str]:
+            lines = Path(path).read_text(encoding='utf-8').splitlines()
+            return [ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith('#')]
+
+        raw: List[str] = []
+
+        if configs:
+            raw = list(configs)
+        elif config_list:
+            p = Path(config_list)
+            if not p.exists():
+                print(f"❌ 配置清單不存在：{config_list}")
+                sys.exit(1)
+            raw = _read_list_file(config_list)
+        else:
+            if Path(default_list).exists():
+                raw = _read_list_file(default_list)
+            if not raw:
+                print("❌ 找不到配置，請使用 --configs 或 --config-list 指定")
+                sys.exit(1)
+
+        valid = [p for p in raw if Path(p).exists()]
+        for skipped in set(raw) - set(valid):
+            print(f"⚠️  跳過不存在的配置：{skipped}")
+
+        if not valid:
+            print("❌ 沒有有效的配置文件")
+            sys.exit(1)
+
+        return valid
+
+    @staticmethod
     def get_nested(config: Dict[str, Any], path: str, default: Any = None) -> Any:
         """
         取得嵌套配置值
@@ -127,3 +178,4 @@ class ConfigLoader:
             return obj
         except (KeyError, TypeError):
             return default
+

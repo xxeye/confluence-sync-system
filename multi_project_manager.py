@@ -9,7 +9,7 @@ import argparse
 import threading
 from pathlib import Path
 from typing import List, Dict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils import ConfigLoader, SyncLogger, LogIcons
 from core import ConfluenceClient, StateManager, FileMonitor
@@ -319,9 +319,13 @@ class MultiProjectManager:
             }
             
             success_count = 0
-            for future in futures:
-                if future.result():
-                    success_count += 1
+            for future in as_completed(futures):
+                project_id = futures[future]
+                try:
+                    if future.result():
+                        success_count += 1
+                except Exception as e:
+                    print(f"❌ [{project_id}] 同步異常: {e}")
         
         print(f"\n✅ 完成！成功: {success_count}/{len(self.projects)}")
     
@@ -428,37 +432,11 @@ def main():
     
     args = parser.parse_args()
     
-    # 收集配置文件路徑
-    config_paths = []
-    
-    if args.configs:
-        # 從命令列參數
-        config_paths = args.configs
-    elif args.config_list:
-        # 從配置清單文件
-        list_file = Path(args.config_list)
-        if not list_file.exists():
-            print(f"❌ 錯誤：配置清單文件不存在: {args.config_list}")
-            sys.exit(1)
-        
-        with open(list_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    config_paths.append(line)
-    
-    # 驗證配置文件
-    valid_configs = []
-    for config_path in config_paths:
-        if Path(config_path).exists():
-            valid_configs.append(config_path)
-        else:
-            print(f"⚠️  警告：配置文件不存在，已跳過: {config_path}")
-    
-    if not valid_configs:
-        print("❌ 錯誤：沒有有效的配置文件")
-        sys.exit(1)
-    
+    # 收集並驗證配置文件路徑（使用統一的 ConfigLoader.load_config_paths）
+    valid_configs = ConfigLoader.load_config_paths(
+        configs=args.configs,
+        config_list=args.config_list,
+    )
     print(f"📋 找到 {len(valid_configs)} 個配置文件")
     
     # 創建多專案管理器
@@ -491,3 +469,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

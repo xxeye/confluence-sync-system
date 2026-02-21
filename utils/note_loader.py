@@ -80,6 +80,11 @@ class NoteLoader:
         stem = Path(key).stem
         return self._notes.get(stem, "")
 
+    def as_dict(self) -> Dict[str, str]:
+        """回傳所有說明資料的副本（公開介面，避免外部直接存取 _notes）"""
+        return dict(self._notes)
+
     def is_empty(self) -> bool:
         """是否沒有任何說明資料"""
         return len(self._notes) == 0
+

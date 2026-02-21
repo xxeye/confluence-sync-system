@@ -59,7 +59,7 @@ class HashCalculator:
             return hashlib.md5(data).hexdigest()
             
         except Exception as e:
-            raise Exception(f"哈希計算失敗: {e}")
+            raise RuntimeError(f"哈希計算失敗: {e}") from e
     
     @staticmethod
     def compare(hash1: str, hash2: str) -> bool:
@@ -74,3 +74,4 @@ class HashCalculator:
             是否相同
         """
         return hash1.lower() == hash2.lower()
+

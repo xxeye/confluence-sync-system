@@ -27,7 +27,7 @@ class SlotGameSyncEngine(BaseSyncEngine):
         self.note_loader = NoteLoader(notes_file)
 
         if not self.note_loader.is_empty():
-            self.logger.info("📄", f"說明文件已載入，共 {len(self.note_loader._notes)} 筆說明")
+            self.logger.info("📄", f"說明文件已載入，共 {len(self.note_loader.as_dict())} 筆說明")
         else:
             self.logger.info("📄", "未設定說明文件或說明文件為空，說明欄位將留空")
 
@@ -69,7 +69,7 @@ class SlotGameSyncEngine(BaseSyncEngine):
         history: List[Dict[str, str]],
     ) -> str:
         jira_filter_url = self.config.get('confluence', {}).get('jira_filter_url')
-        notes           = dict(self.note_loader._notes)
+        notes           = self.note_loader.as_dict()
 
         naming_doc_url = self.config.get('validator', {}).get('naming_doc_url')
 
@@ -101,5 +101,6 @@ class SlotGameSyncEngine(BaseSyncEngine):
                 categories,
                 self.state.get_history_slice(self.history_keep)
             )
+
 
 
