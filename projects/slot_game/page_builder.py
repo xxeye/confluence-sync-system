@@ -62,12 +62,12 @@ class SlotGamePageBuilder:
             notes = {}
 
         # ── 收集所有警告（供頁面頂部彙總用）──────────────────
-        warnings: Dict[str, str] = {}   # {filename: warning_message}
+        warnings: Dict[str, List[str]] = {}  # {filename: [warning, ...]}
         if validator:
             for asset in self._iter_all_assets(categories):
-                w = validator.validate(asset['name'])
-                if w:
-                    warnings[asset['name']] = w
+                ws = validator.validate_all(asset['name'])
+                if ws:
+                    warnings[asset['name']] = ws
 
         body = ''
         body += self._generate_history_table(history)
@@ -148,8 +148,10 @@ class SlotGamePageBuilder:
             return 2  # 未能分類歸到語意欄
 
         buckets: List[List[tuple]] = [[] for _ in COLS]
-        for fn, msg in sorted(warnings.items()):
-            buckets[classify(msg)].append((fn, msg))
+        for fn, msgs in sorted(warnings.items()):
+            multi = len(msgs) > 1  # 違反多條規則
+            for msg in msgs:
+                buckets[classify(msg)].append((fn, msg, multi))
 
         # ── 標題 ──────────────────────────────────────────────
         link_html = ''
@@ -179,10 +181,11 @@ class SlotGamePageBuilder:
             body_rows += '<tr>'
             for bucket in buckets:
                 if row_idx < len(bucket):
-                    fn, msg = bucket[row_idx]
+                    fn, msg, multi = bucket[row_idx]
+                    fn_color = 'color:#e65100;font-weight:bold;' if multi else 'font-weight:bold;'
                     body_rows += (
                         f'<td style="{td_style}">'
-                        f'<span style="font-weight:bold;">{_escape_xml(fn)}</span>'
+                        f'<span style="{fn_color}">{_escape_xml(fn)}</span>'
                         f'</td>'
                     )
                 else:
@@ -331,11 +334,17 @@ class SlotGamePageBuilder:
             warning = validator.validate(asset['name']) if validator else None
 
             if warning:
+                all_warns = validator.validate_all(asset['name']) if validator else [warning]
+                extra = len(all_warns) - 1
+                extra_html = (
+                    f' <span style="color:#e65100;font-weight:bold;">+{extra}</span>'
+                    if extra > 0 else ''
+                )
                 # 橘底 td + span 明確設橘色（避免 Confluence 覆蓋繼承）
                 name_cell = (
                     f"<td style='{_WARN_TD}'>"
                     f"{_escape_xml(asset['name'])}<br/>"
-                    f"<span style='{_WARN_SPAN}'>{_escape_xml(warning)}</span>"
+                    f"<span style='{_WARN_SPAN}'>{_escape_xml(warning)}{extra_html}</span>"
                     f"</td>"
                 )
             else:
@@ -375,7 +384,7 @@ class SlotGamePageBuilder:
                 for a in assets:
                     w = validator.validate(a['name'])
                     if w:
-                        group_warn = w
+                        group_warn = f'{w}（例：{a["name"]}）'
                         break
 
             xhtml += (
@@ -383,7 +392,7 @@ class SlotGamePageBuilder:
                 f'群組：{_escape_xml(group_key)}_{{language}}</p>'
             )
             if group_warn:
-                xhtml += (f'<p style="margin:2px 0 6px 0;">'f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'f' {_escape_xml(group_warn)}</span></p>')
+                xhtml += (f'<p style="margin:2px 0 6px 0;">'f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'f'⚠️ {_escape_xml(group_warn)}</span></p>')
 
             xhtml += (
                 f'<table><tbody>'
@@ -406,6 +415,13 @@ class SlotGamePageBuilder:
                 xhtml += '<tr>'
                 for a in chunk:
                     xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a['orig_w'], 90)}</td>"
+                xhtml += '<td></td>' * pad + '</tr>'
+
+                xhtml += '<tr>'
+                for a in chunk:
+                    w, h = a.get('orig_w', 0), a.get('orig_h', 0)
+                    size_str = f'{w}x{h}' if w and h else '-'
+                    xhtml += f"<td style='font-size:9px;text-align:center;color:#868e96;'>{size_str}</td>"
                 xhtml += '<td></td>' * pad + '</tr>'
 
             xhtml += '</tbody></table>'
@@ -453,6 +469,13 @@ class SlotGamePageBuilder:
                 xhtml += '<tr>'
                 for a in chunk:
                     xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a['orig_w'], 60)}</td>"
+                xhtml += '<td></td>' * pad + '</tr>'
+
+                xhtml += '<tr>'
+                for a in chunk:
+                    w, h = a.get('orig_w', 0), a.get('orig_h', 0)
+                    size_str = f'{w}x{h}' if w and h else '-'
+                    xhtml += f"<td style='font-size:9px;text-align:center;color:#868e96;'>{size_str}</td>"
                 xhtml += '<td></td>' * pad + '</tr>'
 
             xhtml += '</tbody></table>'

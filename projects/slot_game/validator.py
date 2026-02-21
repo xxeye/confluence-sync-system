@@ -106,6 +106,44 @@ class FilenameValidator:
             or self._rule6_lang_suffix(B, E)
         )
 
+    def validate_all(self, filename: str) -> List[str]:
+        """回傳所有違反規則的警告列表（不在第一個命中就停）"""
+        warnings = []
+
+        # 0. 前置過濾：系統/雲端異常（獨立於語意規則）
+        system_warn = self._check_system_filename(filename)
+        if system_warn:
+            warnings.append(system_warn)
+
+        # layout 不驗證語意規則
+        if 'layout' in filename.lower():
+            return warnings
+
+        parts = self._parse(filename)
+
+        # 1. 欄位數量（若有問題，語意規則無法執行，直接回傳）
+        field_warn = self._check_field_count(filename, parts)
+        if field_warn:
+            warnings.append(field_warn)
+            return warnings
+
+        # 2–7. 語意規則（全部跑完，收集所有違規）
+        A, B, C, D = parts[0], parts[1], parts[2], parts[3]
+        E = parts[4] if len(parts) >= 5 else self.d.empty_option
+
+        for check in [
+            self._rule1_name_empty(C),
+            self._rule2_underscore(A, B, C, D, E),
+            self._rule3_name_duplicate(C),
+            self._rule4_forbidden(C),
+            self._rule5_nu_suffix(B, E),
+            self._rule6_lang_suffix(B, E),
+        ]:
+            if check:
+                warnings.append(check)
+
+        return warnings
+
     def validate_group_key(self, group_key: str) -> Optional[str]:
         """
         驗證 NU / 多國語系的群組鍵是否含有異常字元。

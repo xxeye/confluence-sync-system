@@ -31,6 +31,11 @@ file_patterns:
   include: ["*.png", "*.jpg", "*.jpeg"]
   exclude: ["*_temp.*", "*_backup.*"]
 
+  # 資料夾篩選（三擇一，都不填就掃全部）
+  exclude_dirs: ["spine", "backup"]       # 排除指定資料夾，其餘都掃
+  include_dirs: []          # 只掃指定資料夾，其餘忽略
+  # 兩個都不填 → 掃全部
+
 cache:
   remote_state_file: ".sync_cache.json"
   history_file: "version_history.json"
@@ -43,3 +48,4 @@ validator:
   enabled: false
   dict_file: "config/game_dict.yaml"
   naming_doc_url: "https://..."
+

@@ -54,8 +54,9 @@ class SlotGameClassifier:
 
         # 3. NU 數字組：type == 'nu'
         if parts[1].lower() == _NU_TYPE:
-            # parts[3] 是數字 → 缺 visualState，退化為一般分類讓 validator 顯示警告
-            if len(parts) < 5 and parts[3] in _BITMAP_FONT_DIGITS:
+            # parts[3] 開頭是數字 → 缺 visualState（含雲端衝突複本如 "4 (1)"）
+            # 退化為一般分類，讓 validator 顯示警告
+            if len(parts) < 5 and parts[3][:1] in _BITMAP_FONT_DIGITS:
                 return self._by_scene(scene), None
             group_key = '_'.join(parts[:4])
             return f'nu_{self._scene_suffix(scene)}', group_key
@@ -85,6 +86,7 @@ class SlotGameClassifier:
                 'name':   filename,
                 'size':   file_data['size'],
                 'orig_w': file_data['width'],
+                'orig_h': file_data['height'],
             }
             category, group_key = self.classify(asset)
 

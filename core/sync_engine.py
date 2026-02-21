@@ -252,9 +252,18 @@ class BaseSyncEngine(ABC):
             )
             return local_state
         
-        for root, _, files in os.walk(target_path):
+        include_dirs = set(self.file_patterns.get('include_dirs', []))
+        exclude_dirs = set(self.file_patterns.get('exclude_dirs', []))
+
+        for root, dirs, files in os.walk(target_path):
+            # 資料夾白名單/黑名單篩選（原地修改 dirs 讓 os.walk 跳過子資料夾）
+            if include_dirs:
+                dirs[:] = [d for d in dirs if d in include_dirs]
+            elif exclude_dirs:
+                dirs[:] = [d for d in dirs if d not in exclude_dirs]
+
             for filename in files:
-                if not self._is_valid_file(filename, os.path.join(root, filename)):
+                if not self._is_valid_file(filename):
                     continue
                 
                 file_path = os.path.join(root, filename)
@@ -281,21 +290,12 @@ class BaseSyncEngine(ABC):
         
         return local_state
     
-    def _is_valid_file(self, filename: str, file_path: str = None) -> bool:
+    def _is_valid_file(self, filename: str) -> bool:
         """
-        檢查檔案是否有效
-
-        排除規則（硬編碼）：
-        1. 路徑中含有 spine 資料夾
+        檢查檔案是否符合 file_patterns 規則。
+        資料夾層級的篩選（include_dirs / exclude_dirs）由 _scan_local_files 負責。
         """
         filename_lower = filename.lower()
-
-        # 硬排除：路徑含 spine 資料夾
-        if file_path:
-            import os
-            parts = os.path.normpath(file_path).split(os.sep)
-            if any(p.lower() == 'spine' for p in parts):
-                return False
 
         # 檢查包含模式
         include_patterns = self.file_patterns.get('include', ['*.png', '*.jpg', '*.jpeg'])
@@ -545,3 +545,4 @@ class BaseSyncEngine(ABC):
                 self.logger.info("  ", f"  - {filename}")
             if len(diff.to_delete) > 10:
                 self.logger.info("  ", f"  ... 還有 {len(diff.to_delete) - 10} 個")
+
