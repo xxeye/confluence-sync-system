@@ -171,86 +171,134 @@ class BaseSyncEngine(ABC):
     
     def _full_cloud_sync(self) -> Dict[str, Dict[str, Any]]:
         """完整雲端同步（並發下載與校驗）"""
-        remote_state = {}
-        
+        import time
+        remote_state: Dict[str, Dict[str, Any]] = {}
+
         # 取得頁面內容和歷史
         xhtml, _ = self.client.get_page_content()
         history = self.client.parse_history_from_page(xhtml, self.history_keep)
-        
-        # 更新狀態管理器的歷史
+
+        # 更新狀態管理器的歷史（沿用你現有做法）
         self.state._history = history
-        
+
         # 取得所有附件
         all_attachments = self.client.get_all_attachments()
-        
+
         # 過濾圖片附件
         image_attachments = [
             att for att in all_attachments
-            if self._is_valid_file(att['title'])
+            if self._is_valid_file(att.get('title', ''))
         ]
-        
+
         total = len(image_attachments)
         self.logger.info(
             LogIcons.LAUNCH,
             f"平行校驗中 (執行緒: {self.max_workers['download']})... 目標: {total}"
         )
-        
-        # 並發下載與哈希計算
+
+        # ✅ 防呆：避免 total=0 時除以 0
+        if total == 0:
+            self.logger.info(LogIcons.PROGRESS, "雲端沒有符合規則的圖片附件，略過校驗。")
+            return {}
+
+        t0 = time.perf_counter()
+
         failed = 0
+        done = 0
+        step = max(1, total // 10)
+
+        # 統計：總下載量 / 平均耗時（依你 _download_and_hash 回傳的 size/elapsed_ms）
+        total_bytes = 0
+        total_elapsed_ms = 0.0
+
         with ThreadPoolExecutor(max_workers=self.max_workers['download']) as executor:
             futures = {
                 executor.submit(self._download_and_hash, att): att
                 for att in image_attachments
             }
 
-            done = 0
             for future in as_completed(futures):
-                done += 1
-                result = future.result()
+                att = futures[future]
+                title = att.get('title', '<unknown>')
 
-                if result:
-                    filename, file_data = result
-                    remote_state[filename] = file_data
-                else:
+                try:
+                    result = future.result()
+                    if result:
+                        filename, file_data = result
+                        remote_state[filename] = file_data
+
+                        size = file_data.get('size')
+                        elapsed_ms = file_data.get('elapsed_ms')
+                        if isinstance(size, int):
+                            total_bytes += size
+                        if isinstance(elapsed_ms, (int, float)):
+                            total_elapsed_ms += float(elapsed_ms)
+                    else:
+                        failed += 1
+                        self.logger.warning(LogIcons.WARNING, f"附件校驗失敗（無結果）：{title}")
+
+                except Exception as e:
                     failed += 1
+                    self.logger.error(LogIcons.ERROR, f"附件校驗異常：{title}: {e}")
 
-                # 進度日誌
-                if done % max(1, total // 10) == 0 or done == total:
-                    progress = (done / total) * 100
+                done += 1
+
+                if done % step == 0 or done == total:
+                    progress = (done * 100.0) / total
                     self.logger.info(
                         LogIcons.PROGRESS,
                         f"校驗進度: {done}/{total} ({progress:.1f}%)"
                     )
 
-        if failed > 0:
-            self.logger.warning(
-                LogIcons.WARNING,
-                f"⚠️ {failed} 個檔案校驗失敗，已略過（下次同步將嘗試重新上傳）"
-            )
+        dt = time.perf_counter() - t0
+        ok = len(remote_state)
 
-        self.state.remote_state = remote_state
+        mb = total_bytes / (1024 * 1024) if total_bytes else 0.0
+        mbps = (mb / dt) if (dt > 0 and mb > 0) else 0.0
+        avg_ms = (total_elapsed_ms / ok) if ok > 0 else 0.0
+
+        self.logger.info(
+            LogIcons.PROGRESS,
+            f"雲端校驗完成：成功 {ok}/{total}，失敗 {failed}，耗時 {dt:.2f}s，"
+            f"下載量 {mb:.2f}MB，吞吐 {mbps:.2f}MB/s，平均單張 {avg_ms:.1f}ms"
+        )
+
         return remote_state
-    
+
     def _download_and_hash(
         self,
         attachment: Dict[str, Any]
     ) -> Tuple[str, Dict[str, Any]]:
         """下載並計算哈希（並發任務單元）"""
-        filename = attachment['title']
-        
+        from io import BytesIO
+        import time
+
+        filename = attachment.get('title', '<unknown>')
+
         try:
-            download_path = attachment['_links']['download']
+            t0 = time.perf_counter()
+
+            download_path = attachment.get('_links', {}).get('download')
+            if not download_path:
+                raise KeyError("attachment missing _links.download")
+
             content = self.client.download_attachment(download_path)
             file_hash = HashCalculator.calculate(BytesIO(content))
-            
+
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            size = len(content)
+
             return filename, {
-                'id': attachment['id'],
-                'hash': file_hash
+                'id': attachment.get('id'),
+                'hash': file_hash,
+                'size': size,
+                'elapsed_ms': elapsed_ms,
             }
+
         except Exception as e:
             self.logger.error(
                 LogIcons.ERROR,
-                f"下載失敗 {filename}: {e}"
+                f"下載/校驗失敗 {filename}: {e}"
             )
             return None
     
