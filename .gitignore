@@ -49,6 +49,7 @@ logs/
 .sync_cache.json
 version_history.json
 *.db
+all_code.txt
 
 # 配置（專案設定檔排除）
 config/*.yaml

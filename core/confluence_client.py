@@ -322,6 +322,56 @@ class ConfluenceClient:
 
         return True
 
+    def get_page_versions(self) -> List[Dict[str, Any]]:
+        """
+        取得頁面所有版本清單（由新到舊）
+
+        Returns:
+            版本列表，每筆含 number / when / by / minorEdit
+        """
+        url = f"{self.base_url}/wiki/rest/api/content/{self.page_id}/version"
+        all_versions = []
+        start = 0
+        limit = 200
+
+        while True:
+            response = requests.get(
+                url,
+                auth=self.auth,
+                params={'limit': limit, 'start': start},
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            data = response.json()
+            results = data.get('results', [])
+            if not results:
+                break
+            all_versions.extend(results)
+            start += limit
+            if len(results) < limit:
+                break
+
+        return all_versions
+
+    def delete_page_version(self, version_number: int) -> bool:
+        """
+        刪除指定頁面版本。
+        注意：Confluence Cloud 不允許刪除最新版本。
+
+        Args:
+            version_number: 要刪除的版本號
+
+        Returns:
+            是否成功
+        """
+        url = f"{self.base_url}/wiki/rest/api/content/{self.page_id}/version/{version_number}"
+        response = requests.delete(
+            url,
+            auth=self.auth,
+            timeout=self.timeout
+        )
+        return response.status_code in [200, 204]
+
     def parse_history_from_page(
         self,
         xhtml: str,
@@ -358,3 +408,4 @@ class ConfluenceClient:
                         })
         
         return history
+
