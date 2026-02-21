@@ -70,6 +70,11 @@ class BaseSyncEngine(ABC):
         self.file_patterns = config.get('file_patterns', {})
         self.project_name = config['project']['name']
         self.user_id = config['confluence']['user_account_id']
+        self._appearance_set = False  # set_page_appearance 只需執行一次
+
+        # 輸出 StateManager 載入時產生的警告（此時 logger 已就緒）
+        for warn in self.state._load_warnings:
+            self.logger.warning(LogIcons.WARNING, warn)
     
     @abstractmethod
     def classify_assets(
@@ -152,7 +157,7 @@ class BaseSyncEngine(ABC):
             self._execute_operations(diff, local_state, remote_state)
             
             # 5. 更新頁面內容
-            needs_redraw = (len(diff.to_add) > 0 or len(diff.to_delete) > 0 or is_startup)
+            needs_redraw = diff.has_changes() or is_startup
             self._update_page(local_state, diff, log_reason, needs_redraw)
             
             # 6. 儲存狀態
@@ -191,21 +196,24 @@ class BaseSyncEngine(ABC):
         )
         
         # 並發下載與哈希計算
+        failed = 0
         with ThreadPoolExecutor(max_workers=self.max_workers['download']) as executor:
             futures = {
                 executor.submit(self._download_and_hash, att): att
                 for att in image_attachments
             }
-            
+
             done = 0
             for future in as_completed(futures):
                 done += 1
                 result = future.result()
-                
+
                 if result:
                     filename, file_data = result
                     remote_state[filename] = file_data
-                
+                else:
+                    failed += 1
+
                 # 進度日誌
                 if done % max(1, total // 10) == 0 or done == total:
                     progress = (done / total) * 100
@@ -213,7 +221,13 @@ class BaseSyncEngine(ABC):
                         LogIcons.PROGRESS,
                         f"校驗進度: {done}/{total} ({progress:.1f}%)"
                     )
-        
+
+        if failed > 0:
+            self.logger.warning(
+                LogIcons.WARNING,
+                f"⚠️ {failed} 個檔案校驗失敗，已略過（下次同步將嘗試重新上傳）"
+            )
+
         self.state.remote_state = remote_state
         return remote_state
     
@@ -480,15 +494,6 @@ class BaseSyncEngine(ABC):
         # 推送到 Confluence
         page_title = f"美術資源清單_{self.project_name}"
 
-        # ── Debug dump：將送出的 XHTML 存到檔案，方便排查 500 錯誤 ──
-        import pathlib
-        logs_dir = pathlib.Path("logs")
-        logs_dir.mkdir(exist_ok=True)
-        dump_path = logs_dir / f"{self.project_name}_debug_last_content.html"
-        dump_path.write_text(new_content, encoding="utf-8")
-        self.logger.info(LogIcons.NOTE, f"Debug: XHTML 已存至 {dump_path.resolve()}")
-        # ────────────────────────────────────────────────────────────
-
         self.client.update_page_content(
             new_content,
             page_title,
@@ -496,8 +501,10 @@ class BaseSyncEngine(ABC):
         )
 
         # 設定頁面為寬版（content property，與 body 分開）
-        page_width = self.config.get('confluence', {}).get('page_width', 'full-width')
-        self.client.set_page_appearance(page_width)
+        if not self._appearance_set:
+            page_width = self.config.get('confluence', {}).get('page_width', 'full-width')
+            self.client.set_page_appearance(page_width)
+            self._appearance_set = True
 
         self.logger.success(
             LogIcons.COMPLETE,
@@ -545,4 +552,5 @@ class BaseSyncEngine(ABC):
                 self.logger.info("  ", f"  - {filename}")
             if len(diff.to_delete) > 10:
                 self.logger.info("  ", f"  ... 還有 {len(diff.to_delete) - 10} 個")
+
 

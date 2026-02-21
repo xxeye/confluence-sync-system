@@ -24,6 +24,7 @@ class StateManager:
         self.history_file = Path(history_file)
         self._remote_state: Dict[str, Dict[str, Any]] = {}
         self._history: List[Dict[str, str]] = []
+        self._load_warnings: List[str] = []  # _load() 中產生的警告，由上層用 logger 輸出
         self._load()
     
     def _load(self) -> None:
@@ -34,16 +35,17 @@ class StateManager:
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
                     self._remote_state = json.load(f)
             except Exception as e:
-                print(f"警告：載入快取失敗，將使用空狀態: {e}")
+                # 快取損壞時記錄警告並以空狀態繼續，下次同步會重建
+                self._load_warnings.append(f"快取載入失敗，將重建：{e}")
                 self._remote_state = {}
-        
+
         # 載入版本歷史
         if self.history_file.exists():
             try:
                 with open(self.history_file, 'r', encoding='utf-8') as f:
                     self._history = json.load(f)
             except Exception as e:
-                print(f"警告：載入歷史失敗，將使用空歷史: {e}")
+                self._load_warnings.append(f"歷史記錄載入失敗，將使用空歷史：{e}")
                 self._history = []
     
     def save(self) -> None:
@@ -140,3 +142,4 @@ class StateManager:
         self._history = []
         if self.history_file.exists():
             self.history_file.unlink()
+

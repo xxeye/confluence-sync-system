@@ -360,17 +360,24 @@ class SlotGamePageBuilder:
             )
         return xhtml + '</tbody></table>'
 
-    # ── 多國語系格狀排列（13 欄）──────────────────────────────
-    def _generate_multi_grid(
+    # ── 共用格狀排列核心 ─────────────────────────────────────
+    def _generate_grid(
         self,
         title: str,
         groups: Dict[str, List[Dict[str, Any]]],
         notes: Dict[str, str],
+        cols: int,
+        thumb_size: int,
+        get_label,        # Callable[[asset], str]       標籤列取值
+        get_header_html,  # Callable[[group_key], str]   群組標題 HTML
         validator: Optional['FilenameValidator'] = None,
     ) -> str:
+        """
+        多國語系與 NU 數字組共用的格狀排列生成器。
+        差異由 get_label / get_header_html 兩個 callable 注入。
+        """
         if not groups:
             return ''
-        cols  = MULTI_COLS
         xhtml = f'<h3>{title}</h3>'
 
         for group_key, assets in sorted(groups.items()):
@@ -379,7 +386,7 @@ class SlotGamePageBuilder:
             # 群組警告：group_key 本身異常（如括號數字）
             group_warn = validator.validate_group_key(group_key) if validator else None
 
-            # 群組警告：群組內任一檔案有問題（如欄位不足、語意違規）
+            # 群組警告：群組內任一檔案有問題
             if not group_warn and validator:
                 for a in assets:
                     w = validator.validate(a['name'])
@@ -387,12 +394,13 @@ class SlotGamePageBuilder:
                         group_warn = w.lstrip('⚠️').strip()
                         break
 
-            xhtml += (
-                f'<p style="font-size:16px;font-weight:bold;margin-top:20px;">'
-                f'群組：{_escape_xml(group_key)}_{{language}}</p>'
-            )
+            xhtml += get_header_html(group_key)
             if group_warn:
-                xhtml += (f'<p style="margin:2px 0 6px 0;">'f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'f' {_escape_xml(group_warn)}</span></p>')
+                xhtml += (
+                    f'<p style="margin:2px 0 6px 0;">'
+                    f'<span style="color:#e65100;font-size:12px;font-weight:bold;">'
+                    f' {_escape_xml(group_warn)}</span></p>'
+                )
 
             xhtml += (
                 f'<table><tbody>'
@@ -405,18 +413,20 @@ class SlotGamePageBuilder:
                 chunk = sorted_assets[i:i + cols]
                 pad   = cols - len(chunk)
 
+                # 標籤行
                 xhtml += '<tr>'
                 for a in chunk:
-                    parts = a['name'].rsplit('.', 1)[0].split('_')
-                    code  = parts[4].upper() if len(parts) > 4 else '?'
-                    xhtml += f"<td style='background:#f1f3f5;font-size:10px;text-align:center;'>{code}</td>"
+                    label = get_label(a)
+                    xhtml += f"<td style='background:#f1f3f5;font-size:10px;text-align:center;'>{_escape_xml(label)}</td>"
                 xhtml += '<td></td>' * pad + '</tr>'
 
+                # 圖片行
                 xhtml += '<tr>'
                 for a in chunk:
-                    xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a['orig_w'], 90)}</td>"
+                    xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a['orig_w'], thumb_size)}</td>"
                 xhtml += '<td></td>' * pad + '</tr>'
 
+                # 尺寸行
                 xhtml += '<tr>'
                 for a in chunk:
                     w, h = a.get('orig_w', 0), a.get('orig_h', 0)
@@ -426,6 +436,32 @@ class SlotGamePageBuilder:
 
             xhtml += '</tbody></table>'
         return xhtml
+
+    # ── 多國語系格狀排列（13 欄）──────────────────────────────
+    def _generate_multi_grid(
+        self,
+        title: str,
+        groups: Dict[str, List[Dict[str, Any]]],
+        notes: Dict[str, str],
+        validator: Optional['FilenameValidator'] = None,
+    ) -> str:
+        def get_label(a):
+            parts = a['name'].rsplit('.', 1)[0].split('_')
+            return parts[4].upper() if len(parts) > 4 else '?'
+
+        def get_header_html(group_key):
+            return (
+                f'<p style="font-size:16px;font-weight:bold;margin-top:20px;">'
+                f'群組：{_escape_xml(group_key)}_{{language}}</p>'
+            )
+
+        return self._generate_grid(
+            title, groups, notes,
+            cols=MULTI_COLS, thumb_size=90,
+            get_label=get_label,
+            get_header_html=get_header_html,
+            validator=validator,
+        )
 
     # ── NU 數字組格狀排列（16 欄）────────────────────────────
     def _generate_nu_grid(
@@ -435,51 +471,19 @@ class SlotGamePageBuilder:
         notes: Dict[str, str],
         validator: Optional['FilenameValidator'] = None,
     ) -> str:
-        if not groups:
-            return ''
-        cols  = NU_COLS
-        xhtml = f'<h3>{title}</h3>'
+        def get_label(a):
+            return a['name'].rsplit('.', 1)[0].split('_')[-1]
 
-        for group_key, assets in sorted(groups.items()):
-            group_note = notes.get(group_key, '')
-            # 群組 key 異常警告
-            group_warn = validator.validate_group_key(group_key) if validator else None
+        def get_header_html(group_key):
+            return f'<h4>{_escape_xml(group_key)}</h4>'
 
-            xhtml += f'<h4>{_escape_xml(group_key)}</h4>'
-            if group_warn:
-                xhtml += (f'<p style="margin:2px 0 6px 0;">'f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'f'{_escape_xml(group_warn)}</span></p>')
-
-            xhtml += (
-                f'<table><tbody>'
-                f"<tr><th colspan='{cols}' style='background:#fffde7;text-align:left;'>"
-                f'備註說明：{_escape_xml(group_note)}</th></tr>'
-            )
-
-            sorted_assets = sorted(assets, key=lambda x: x['name'])
-            for i in range(0, len(sorted_assets), cols):
-                chunk = sorted_assets[i:i + cols]
-                pad   = cols - len(chunk)
-
-                xhtml += '<tr>'
-                for a in chunk:
-                    label = a['name'].rsplit('.', 1)[0].split('_')[-1]
-                    xhtml += f"<td style='background:#f1f3f5;font-size:10px;text-align:center;'>{_escape_xml(label)}</td>"
-                xhtml += '<td></td>' * pad + '</tr>'
-
-                xhtml += '<tr>'
-                for a in chunk:
-                    xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a['orig_w'], 60)}</td>"
-                xhtml += '<td></td>' * pad + '</tr>'
-
-                xhtml += '<tr>'
-                for a in chunk:
-                    w, h = a.get('orig_w', 0), a.get('orig_h', 0)
-                    size_str = f'{w}x{h}' if w and h else '-'
-                    xhtml += f"<td style='font-size:9px;text-align:center;color:#868e96;'>{size_str}</td>"
-                xhtml += '<td></td>' * pad + '</tr>'
-
-            xhtml += '</tbody></table>'
-        return xhtml
+        return self._generate_grid(
+            title, groups, notes,
+            cols=NU_COLS, thumb_size=60,
+            get_label=get_label,
+            get_header_html=get_header_html,
+            validator=validator,
+        )
 
     # ── 工具：收集所有 asset（供彙總警告用）──────────────────
     @staticmethod
@@ -490,3 +494,4 @@ class SlotGamePageBuilder:
             elif isinstance(v, dict):
                 for group in v.values():
                     yield from group
+
