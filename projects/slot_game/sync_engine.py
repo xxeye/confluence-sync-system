@@ -47,6 +47,7 @@ class SlotGameSyncEngine(BaseSyncEngine):
                     self.classifier = SlotGameClassifier(
                         lang_codes=loader.language,
                         bitmap_font_digits=loader.bitmap_font,
+                        scene_modules=loader.scene_module,
                     )
                     self.logger.info("🔍", f"檔名驗證器已啟用，字典：{dict_file}")
                 except FileNotFoundError as e:

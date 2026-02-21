@@ -40,15 +40,39 @@ def _stem(filename: str) -> str:
 class SlotGamePageBuilder:
 
     @staticmethod
-    def get_ac_image_tag(filename: str, img_w: int, target_max: int) -> str:
-        final_w = min(img_w, target_max)
+    @staticmethod
+    def get_ac_image_tag(
+        filename: str,
+        orig_w: int,
+        orig_h: int,
+        max_w: int,
+        max_h: int,
+    ) -> str:
+        """
+        產生 Confluence ac:image 標籤，強制固定儲存格高度。
+
+        一律設定 ac:width + ac:height，讓 Confluence 統一縮放，
+        確保每列等高。計算邏輯：
+          - 等比例縮放到 max_w x max_h 範圍內
+          - 若原始尺寸小於限制，用原始尺寸（不放大，不模糊）
+          - 原始尺寸未知（0）時直接用 max_w x max_h
+        """
+        # 原始高度已知且超過 max_h → 等比例縮小並設 ac:width
+        # 其他情況不設任何尺寸，讓 Confluence 自動顯示原始大小
+        if orig_h > 0 and max_h > 0 and orig_h > max_h:
+            scale   = max_h / orig_h
+            final_w = max(1, int((orig_w or orig_h) * scale))
+            return (
+                f'<ac:image ac:width="{final_w}">'
+                f'<ri:attachment ri:filename="{_escape_xml(filename)}" />'
+                f'</ac:image>'
+            )
         return (
-            f'<ac:image ac:width="{final_w}">'
+            f'<ac:image>'
             f'<ri:attachment ri:filename="{_escape_xml(filename)}" />'
             f'</ac:image>'
         )
 
-    # ── 頁面組裝入口 ──────────────────────────────────────────
     def assemble(
         self,
         categories: Dict[str, Any],
@@ -62,20 +86,46 @@ class SlotGamePageBuilder:
             notes = {}
 
         # ── 收集所有警告（供頁面頂部彙總用）──────────────────
+        # 包含 unknown 分類的檔案（classifier 無法歸類）
         warnings: Dict[str, List[str]] = {}  # {filename: [warning, ...]}
         if validator:
             for asset in self._iter_all_assets(categories):
                 ws = validator.validate_all(asset['name'])
                 if ws:
                     warnings[asset['name']] = ws
+        # unknown 分類即使 validator 未啟用也納入警告
+        for asset in categories.get('unknown', []):
+            if asset['name'] not in warnings:
+                warnings[asset['name']] = ['⚠️ 命名不符合規範，無法自動分類']
+
+        # ── 有警告的檔案從一般分類移除，統一在命名異常列表顯示 ──
+        warned = set(warnings.keys())
+        if warned:
+            for key in list(categories.keys()):
+                if isinstance(categories[key], list):
+                    categories[key] = [
+                        a for a in categories[key]
+                        if a['name'] not in warned
+                    ]
+                elif isinstance(categories[key], dict):
+                    for gk in list(categories[key].keys()):
+                        categories[key][gk] = [
+                            a for a in categories[key][gk]
+                            if a['name'] not in warned
+                        ]
+                        if not categories[key][gk]:
+                            del categories[key][gk]
 
         body = ''
         body += self._generate_history_table(history)
-
-        # 頂部命名錯誤彙總（更新紀錄後、TOC 前）
         if warnings:
-            body += self._generate_warning_summary(warnings, naming_doc_url)
-
+            body += (
+                '<table><tbody><tr>'
+                '<td style="background:#f5f5f5;padding:8px 12px;">'
+                '<p style="margin:0;color:#e65100;font-weight:bold;font-size:12px;">'
+                '⚠️ 本次同步存在命名異常的元件，列表請見頁面最底部。'
+                '</p></td></tr></tbody></table>'
+            )
         body += self._generate_top_toc()
 
         if jira_filter_url:
@@ -122,93 +172,113 @@ class SlotGamePageBuilder:
             categories['nu_loading'], notes, validator,
         )
 
+        # 命名異常列表移至最後
+        if warnings:
+            body += self._generate_warning_summary(warnings, naming_doc_url, categories, notes)
+
         return body
 
     # ── 頂部命名錯誤彙總 ──────────────────────────────────────
-    @staticmethod
     def _generate_warning_summary(
-        warnings: Dict[str, str],
+        self,
+        warnings: Dict[str, List[str]],
         naming_doc_url: Optional[str],
+        categories: Dict[str, Any],
+        notes: Optional[Dict[str, str]] = None,
     ) -> str:
         """
-        更新紀錄後、TOC 前的橘色彙總區塊。
-        警告依類型分成三欄：雲端/複製異常 / 欄位不足 / 語意規則違反。
+        命名異常列表，放在頁面最後。
+        每檔一列：圖片 | 檔名＋違規規則 | 尺寸 | 備註（同 notes）
         """
-        # ── 分欄設定 ──────────────────────────────────────────
-        COLS = [
-            ('🔁 雲端／複製異常',  ['衝突複本', '複製', 'Copy', 'Dropbox', '暫存', '空白']),
-            ('📐 欄位不足',       ['欄位不足', '疑似 NU', '疑似多國']),
-            ('🚫 語意規則違反',   ['命名', '禁詞', '底線', 'nu', '多語系']),
-        ]
+        if notes is None:
+            notes = {}
 
-        def classify(msg: str) -> int:
-            for idx, (_, keywords) in enumerate(COLS):
-                if any(k in msg for k in keywords):
-                    return idx
-            return 2  # 未能分類歸到語意欄
+        def _stem(filename: str) -> str:
+            for ext in ('.png', '.jpg', '.jpeg'):
+                if filename.lower().endswith(ext):
+                    return filename[:-len(ext)]
+            return filename
 
-        buckets: List[List[tuple]] = [[] for _ in COLS]
-        for fn, msgs in sorted(warnings.items()):
-            multi = len(msgs) > 1  # 違反多條規則
-            for msg in msgs:
-                buckets[classify(msg)].append((fn, msg, multi))
+        # ── 建立 filename → asset 對照表 ──────────────────────
+        asset_map: Dict[str, Dict] = {}
+        for asset in self._iter_all_assets(categories):
+            asset_map[asset['name']] = asset
 
         # ── 標題 ──────────────────────────────────────────────
         link_html = ''
         if naming_doc_url:
-            safe_url = _escape_xml(naming_doc_url)
-            link_html = f'，請參照 <a href="{safe_url}">命名規範文件</a> 修正'
-
-        title = (
-            f'<p style="{_WARN_SUMMARY_TITLE}">'
+            link_html = (
+                f'，請參照 <a href="{_escape_xml(naming_doc_url)}">命名規範文件</a> 修正'
+            )
+        title_html = (
+            f'<p style="{_WARN_SUMMARY_TITLE}">' +
             f'⚠️ 本次同步發現命名異常{link_html}</p>'
         )
 
-        # ── 內部分欄表格 ──────────────────────────────────────
-        th_style = (
-            'background:#ffe0b2; color:#bf360c; font-size:11px; font-weight:bold; text-align:left; padding:4px 8px; white-space:nowrap;'
-        )
-        td_style = 'font-size:11px; vertical-align:top; padding:3px 8px; white-space:nowrap;'
+        # ── 樣式 ──────────────────────────────────────────────
+        th = ('background:#ffe0b2;color:#bf360c;font-size:11px;'
+              'font-weight:bold;padding:4px 8px;text-align:left;')
+        td = 'padding:4px 8px;vertical-align:top;font-size:11px;'
 
-        header_cells = ''.join(
-            f'<th style="{th_style}">{_escape_xml(col_title)}</th>'
-            for col_title, _ in COLS
-        )
+        rows = ''
+        for fn, msgs in sorted(warnings.items()):
+            asset   = asset_map.get(fn, {'name': fn, 'orig_w': 0, 'orig_h': 0})
+            ow      = asset.get('orig_w', 0)
+            oh      = asset.get('orig_h', 0)
+            multi   = len(msgs) > 1
+            fn_clr  = 'color:#e65100;font-weight:bold;' if multi else 'font-weight:bold;'
 
-        max_rows = max((len(b) for b in buckets), default=0)
-        body_rows = ''
-        for row_idx in range(max_rows):
-            body_rows += '<tr>'
-            for bucket in buckets:
-                if row_idx < len(bucket):
-                    fn, msg, multi = bucket[row_idx]
-                    fn_color = 'color:#e65100;font-weight:bold;' if multi else 'font-weight:bold;'
-                    body_rows += (
-                        f'<td style="{td_style}">'
-                        f'<span style="{fn_color}">{_escape_xml(fn)}</span>'
-                        f'</td>'
-                    )
-                else:
-                    body_rows += '<td></td>'
-            body_rows += '</tr>'
+            # 圖片欄
+            img_cell = (
+                f'<td style="{td};text-align:center;">' +
+                self.get_ac_image_tag(fn, ow, oh, max_w=80, max_h=60) +
+                '</td>'
+            )
+
+            # 檔名＋違規規則欄
+            rules_html = ''
+            for msg in msgs:
+                clean_msg  = msg.lstrip('⚠️').strip()
+                rules_html += (
+                    f'<p style="margin:2px 0;font-size:10px;color:#bf360c;">' +
+                    _escape_xml(clean_msg) + '</p>'
+                )
+            name_cell = (
+                f'<td style="{td}">' +
+                f'<span style="{fn_clr}">{_escape_xml(fn)}</span>' +
+                rules_html + '</td>'
+            )
+
+            # 尺寸欄
+            size_str  = f'{ow} x {oh}' if ow and oh else '-'
+            size_cell = f'<td style="{td};white-space:nowrap;">{size_str}</td>'
+
+            # 備註欄（同 notes）
+            note      = notes.get(fn, notes.get(_stem(fn), ''))
+            note_cell = f'<td style="{td}">{_escape_xml(note)}</td>'
+
+            rows += f'<tr>{img_cell}{name_cell}{size_cell}{note_cell}</tr>'
 
         inner_table = (
-            f'<table style="width:100%; border-collapse:collapse;">'
-            f'<thead><tr>{header_cells}</tr></thead>'
-            f'<tbody>{body_rows}</tbody>'
+            f'<table style="width:100%;border-collapse:collapse;">'
+            f'<thead><tr>'
+            f'<th style="{th}">圖片</th>'
+            f'<th style="{th}">檔名</th>'
+            f'<th style="{th}">尺寸</th>'
+            f'<th style="{th}">備註</th>'
+            f'</tr></thead>'
+            f'<tbody>{rows}</tbody>'
             f'</table>'
         )
 
         return (
             '<h2>⚠️ 命名異常列表</h2>'
             '<table><tbody><tr>'
-            f'<td style="{_WARN_SUMMARY_TD}">'
-            f'{title}{inner_table}'
-            f'</td>'
-            '</tr></tbody></table>'
+            f'<td style="{_WARN_SUMMARY_TD}">' +
+            title_html + inner_table +
+            '</td></tr></tbody></table>'
         )
 
-    # ── TOC ──────────────────────────────────────────────────
     @staticmethod
     def _generate_top_toc() -> str:
         return (
@@ -300,7 +370,7 @@ class SlotGamePageBuilder:
 
             xhtml += '<tr>'
             for a in chunk:
-                xhtml += f"<td>{self.get_ac_image_tag(a['name'], a['orig_w'], 200)}</td>"
+                xhtml += f"<td>{self.get_ac_image_tag(a['name'], a.get('orig_w',0), a.get('orig_h',0), max_w=200, max_h=9999)}</td>"
             xhtml += '<td></td>' * pad + '</tr>'
 
             has_notes = any(notes.get(a['name'], notes.get(_stem(a['name']), '')) for a in chunk)
@@ -352,7 +422,7 @@ class SlotGamePageBuilder:
 
             xhtml += (
                 f'<tr>'
-                f"<td>{self.get_ac_image_tag(asset['name'], asset['orig_w'], 120)}</td>"
+                f"<td>{self.get_ac_image_tag(asset['name'], asset.get('orig_w',0), asset.get('orig_h',0), max_w=120, max_h=9999)}</td>"
                 f'{name_cell}'
                 f"<td>{asset['size']}</td>"
                 f'<td>{_escape_xml(note)}</td>'
@@ -360,24 +430,17 @@ class SlotGamePageBuilder:
             )
         return xhtml + '</tbody></table>'
 
-    # ── 共用格狀排列核心 ─────────────────────────────────────
-    def _generate_grid(
+    # ── 多國語系格狀排列（13 欄）──────────────────────────────
+    def _generate_multi_grid(
         self,
         title: str,
         groups: Dict[str, List[Dict[str, Any]]],
         notes: Dict[str, str],
-        cols: int,
-        thumb_size: int,
-        get_label,        # Callable[[asset], str]       標籤列取值
-        get_header_html,  # Callable[[group_key], str]   群組標題 HTML
         validator: Optional['FilenameValidator'] = None,
     ) -> str:
-        """
-        多國語系與 NU 數字組共用的格狀排列生成器。
-        差異由 get_label / get_header_html 兩個 callable 注入。
-        """
         if not groups:
             return ''
+        cols  = MULTI_COLS
         xhtml = f'<h3>{title}</h3>'
 
         for group_key, assets in sorted(groups.items()):
@@ -386,7 +449,7 @@ class SlotGamePageBuilder:
             # 群組警告：group_key 本身異常（如括號數字）
             group_warn = validator.validate_group_key(group_key) if validator else None
 
-            # 群組警告：群組內任一檔案有問題
+            # 群組警告：群組內任一檔案有問題（如欄位不足、語意違規）
             if not group_warn and validator:
                 for a in assets:
                     w = validator.validate(a['name'])
@@ -394,13 +457,12 @@ class SlotGamePageBuilder:
                         group_warn = w.lstrip('⚠️').strip()
                         break
 
-            xhtml += get_header_html(group_key)
+            xhtml += (
+                f'<p style="font-size:16px;font-weight:bold;margin-top:20px;">'
+                f'群組：{_escape_xml(group_key)}_{{language}}</p>'
+            )
             if group_warn:
-                xhtml += (
-                    f'<p style="margin:2px 0 6px 0;">'
-                    f'<span style="color:#e65100;font-size:12px;font-weight:bold;">'
-                    f' {_escape_xml(group_warn)}</span></p>'
-                )
+                xhtml += (f'<p style="margin:2px 0 6px 0;">'f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'f' {_escape_xml(group_warn)}</span></p>')
 
             xhtml += (
                 f'<table><tbody>'
@@ -413,20 +475,18 @@ class SlotGamePageBuilder:
                 chunk = sorted_assets[i:i + cols]
                 pad   = cols - len(chunk)
 
-                # 標籤行
                 xhtml += '<tr>'
                 for a in chunk:
-                    label = get_label(a)
-                    xhtml += f"<td style='background:#f1f3f5;font-size:10px;text-align:center;'>{_escape_xml(label)}</td>"
+                    parts = a['name'].rsplit('.', 1)[0].split('_')
+                    code  = parts[4].upper() if len(parts) > 4 else '?'
+                    xhtml += f"<td style='background:#f1f3f5;font-size:10px;text-align:center;'>{code}</td>"
                 xhtml += '<td></td>' * pad + '</tr>'
 
-                # 圖片行
                 xhtml += '<tr>'
                 for a in chunk:
-                    xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a['orig_w'], thumb_size)}</td>"
+                    xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a.get('orig_w',0), a.get('orig_h',0), max_w=90, max_h=9999)}</td>"
                 xhtml += '<td></td>' * pad + '</tr>'
 
-                # 尺寸行
                 xhtml += '<tr>'
                 for a in chunk:
                     w, h = a.get('orig_w', 0), a.get('orig_h', 0)
@@ -437,32 +497,6 @@ class SlotGamePageBuilder:
             xhtml += '</tbody></table>'
         return xhtml
 
-    # ── 多國語系格狀排列（13 欄）──────────────────────────────
-    def _generate_multi_grid(
-        self,
-        title: str,
-        groups: Dict[str, List[Dict[str, Any]]],
-        notes: Dict[str, str],
-        validator: Optional['FilenameValidator'] = None,
-    ) -> str:
-        def get_label(a):
-            parts = a['name'].rsplit('.', 1)[0].split('_')
-            return parts[4].upper() if len(parts) > 4 else '?'
-
-        def get_header_html(group_key):
-            return (
-                f'<p style="font-size:16px;font-weight:bold;margin-top:20px;">'
-                f'群組：{_escape_xml(group_key)}_{{language}}</p>'
-            )
-
-        return self._generate_grid(
-            title, groups, notes,
-            cols=MULTI_COLS, thumb_size=90,
-            get_label=get_label,
-            get_header_html=get_header_html,
-            validator=validator,
-        )
-
     # ── NU 數字組格狀排列（16 欄）────────────────────────────
     def _generate_nu_grid(
         self,
@@ -471,19 +505,51 @@ class SlotGamePageBuilder:
         notes: Dict[str, str],
         validator: Optional['FilenameValidator'] = None,
     ) -> str:
-        def get_label(a):
-            return a['name'].rsplit('.', 1)[0].split('_')[-1]
+        if not groups:
+            return ''
+        cols  = NU_COLS
+        xhtml = f'<h3>{title}</h3>'
 
-        def get_header_html(group_key):
-            return f'<h4>{_escape_xml(group_key)}</h4>'
+        for group_key, assets in sorted(groups.items()):
+            group_note = notes.get(group_key, '')
+            # 群組 key 異常警告
+            group_warn = validator.validate_group_key(group_key) if validator else None
 
-        return self._generate_grid(
-            title, groups, notes,
-            cols=NU_COLS, thumb_size=60,
-            get_label=get_label,
-            get_header_html=get_header_html,
-            validator=validator,
-        )
+            xhtml += f'<h4>{_escape_xml(group_key)}</h4>'
+            if group_warn:
+                xhtml += (f'<p style="margin:2px 0 6px 0;">'f'<span style="color:#e65100; font-size:12px; font-weight:bold;">'f'{_escape_xml(group_warn)}</span></p>')
+
+            xhtml += (
+                f'<table><tbody>'
+                f"<tr><th colspan='{cols}' style='background:#fffde7;text-align:left;'>"
+                f'備註說明：{_escape_xml(group_note)}</th></tr>'
+            )
+
+            sorted_assets = sorted(assets, key=lambda x: x['name'])
+            for i in range(0, len(sorted_assets), cols):
+                chunk = sorted_assets[i:i + cols]
+                pad   = cols - len(chunk)
+
+                xhtml += '<tr>'
+                for a in chunk:
+                    label = a['name'].rsplit('.', 1)[0].split('_')[-1]
+                    xhtml += f"<td style='background:#f1f3f5;font-size:10px;text-align:center;'>{_escape_xml(label)}</td>"
+                xhtml += '<td></td>' * pad + '</tr>'
+
+                xhtml += '<tr>'
+                for a in chunk:
+                    xhtml += f"<td style='text-align:center;'>{self.get_ac_image_tag(a['name'], a.get('orig_w',0), a.get('orig_h',0), max_w=60, max_h=9999)}</td>"
+                xhtml += '<td></td>' * pad + '</tr>'
+
+                xhtml += '<tr>'
+                for a in chunk:
+                    w, h = a.get('orig_w', 0), a.get('orig_h', 0)
+                    size_str = f'{w}x{h}' if w and h else '-'
+                    xhtml += f"<td style='font-size:9px;text-align:center;color:#868e96;'>{size_str}</td>"
+                xhtml += '<td></td>' * pad + '</tr>'
+
+            xhtml += '</tbody></table>'
+        return xhtml
 
     # ── 工具：收集所有 asset（供彙總警告用）──────────────────
     @staticmethod

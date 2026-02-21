@@ -29,14 +29,14 @@ class SlotGameClassifier:
     """
     Slot Game 資源分類器。
 
-    語言代碼與 NU 數字集合從外部傳入（由 DictLoader 提供），
-    避免與 validator.py 維護多份相同資料。
-    未傳入時使用預設值，確保向下相容。
+    嚴格模式：各欄位值必須符合 yaml 字典定義才能正確分類，
+    不符合的檔案落到 'unknown' 分類，由 page_builder 集中顯示。
 
     classify() 回傳 (category, group_key)：
       category  : layout / main / free / loading /
                   multi_main / multi_free / multi_loading /
-                  nu_main / nu_free / nu_loading
+                  nu_main / nu_free / nu_loading /
+                  unknown
       group_key : 多國語系與 NU 群組的識別鍵（其他為 None）
                   格式為 sceneModule_type_name_visualState（前 4 欄）
     """
@@ -45,12 +45,14 @@ class SlotGameClassifier:
         self,
         lang_codes: Optional[Set[str]] = None,
         bitmap_font_digits: Optional[Set[str]] = None,
+        scene_modules: Optional[Set[str]] = None,
     ):
         """
         Args:
             lang_codes:         語言代碼集合，建議從 DictLoader.language 取得。
             bitmap_font_digits: NU 數字集合，建議從 DictLoader.bitmap_font 取得。
-                                兩者未傳入時使用預設值。
+            scene_modules:      場景模組集合，建議從 DictLoader.scene_module 取得。
+                                三者未傳入時使用預設值。
         """
         self._lang_codes = (
             {c.lower() for c in lang_codes}
@@ -62,6 +64,11 @@ class SlotGameClassifier:
             if bitmap_font_digits is not None
             else _DEFAULT_BITMAP_FONT_DIGITS
         )
+        self._scene_modules = (
+            {s.lower() for s in scene_modules}
+            if scene_modules is not None
+            else None  # None 表示不做 sceneModule 驗證（向下相容）
+        )
 
     def classify(self, asset: Dict[str, Any]) -> Tuple[str, Optional[str]]:
         filename = asset['name']
@@ -71,28 +78,35 @@ class SlotGameClassifier:
         if 'layout' in filename.lower():
             return 'layout', None
 
-        # 欄位不足 → 依 sceneModule 做基本分類
+        # 2. 欄位不足 → unknown
         if len(parts) < 4:
-            return self._by_scene(parts[0].lower() if parts else ''), None
+            return 'unknown', None
 
         scene = parts[0].lower()
 
-        # 2. 多國語系：index 4 是語言代碼
+        # 3. sceneModule 驗證（有傳入字典時才驗證）
+        if self._scene_modules is not None and scene not in self._scene_modules:
+            return 'unknown', None
+
+        # 4. NU 數字組（嚴格）：type=nu 且第 5 欄在 bitmap_font
+        if parts[1].lower() == _NU_TYPE:
+            if len(parts) >= 5 and parts[4] in self._bitmap_font_digits:
+                group_key = '_'.join(parts[:4])
+                return f'nu_{self._scene_suffix(scene)}', group_key
+            # type=nu 但不符合 NU 規範 → unknown
+            return 'unknown', None
+
+        # 5. 多國語系：第 5 欄在 language
         if len(parts) >= 5 and parts[4].lower() in self._lang_codes:
             group_key = '_'.join(parts[:4])
             return f'multi_{self._scene_suffix(scene)}', group_key
 
-        # 3. NU 數字組：type == 'nu'
-        if parts[1].lower() == _NU_TYPE:
-            # parts[3] 開頭是數字 → 缺 visualState（含雲端衝突複本如 "4 (1)"）
-            # 退化為一般分類，讓 validator 顯示警告
-            if len(parts) < 5 and parts[3][:1] in self._bitmap_font_digits:
-                return self._by_scene(scene), None
-            group_key = '_'.join(parts[:4])
-            return f'nu_{self._scene_suffix(scene)}', group_key
+        # 6. 一般資源：恰好 4 欄
+        if len(parts) == 4:
+            return self._scene_suffix(scene), None
 
-        # 4. 一般資源
-        return self._by_scene(scene), None
+        # 7. 其他（5 欄但第 5 欄既不是語系也不是數字）→ unknown
+        return 'unknown', None
 
     def organize_assets(
         self,
@@ -109,6 +123,7 @@ class SlotGameClassifier:
             'nu_main':        {},
             'nu_free':        {},
             'nu_loading':     {},
+            'unknown':        [],  # 命名異常：無法歸類的檔案
         }
 
         for filename, file_data in files.items():
@@ -121,7 +136,8 @@ class SlotGameClassifier:
             category, group_key = self.classify(asset)
 
             if group_key:
-                categories[category].setdefault(group_key, [])
+                categories[category].setdefault(group_key, [])\
+                    if isinstance(categories[category], dict) else None
                 categories[category][group_key].append(asset)
             else:
                 categories[category].append(asset)
@@ -142,10 +158,3 @@ class SlotGameClassifier:
         if scene == 'free':    return 'free'
         if scene == 'loading': return 'loading'
         return 'main'
-
-    @staticmethod
-    def _by_scene(scene: str) -> str:
-        if scene == 'free':    return 'free'
-        if scene == 'loading': return 'loading'
-        return 'main'
-
