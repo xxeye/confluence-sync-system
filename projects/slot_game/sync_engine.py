@@ -44,7 +44,10 @@ class SlotGameSyncEngine(BaseSyncEngine):
                     loader         = DictLoader(dict_file)
                     self.validator = FilenameValidator(loader)
                     # 讓 classifier 使用與 validator 相同的語系集合，避免兩邊不同步
-                    self.classifier = SlotGameClassifier(lang_codes=loader.language)
+                    self.classifier = SlotGameClassifier(
+                        lang_codes=loader.language,
+                        bitmap_font_digits=loader.bitmap_font,
+                    )
                     self.logger.info("🔍", f"檔名驗證器已啟用，字典：{dict_file}")
                 except FileNotFoundError as e:
                     self.logger.warning("⚠️", f"字典檔不存在，驗證器停用：{e}")
@@ -97,4 +100,5 @@ class SlotGameSyncEngine(BaseSyncEngine):
                 categories,
                 self.state.get_history_slice(self.history_keep)
             )
+
 
