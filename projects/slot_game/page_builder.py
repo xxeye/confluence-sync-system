@@ -384,7 +384,7 @@ class SlotGamePageBuilder:
                 for a in assets:
                     w = validator.validate(a['name'])
                     if w:
-                        group_warn = f'{w}（例：{a["name"]}）'
+                        group_warn = w.lstrip('⚠️').strip()
                         break
 
             xhtml += (
