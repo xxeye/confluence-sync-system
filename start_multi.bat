@@ -1,62 +1,62 @@
 @echo off
 cd /d "%~dp0"
 setlocal enabledelayedexpansion
-chcp 950 >nul
+chcp 65001 >nul
 
-REM ¦h±M®×ºŞ²z¾¹§Ö³t±Ò°Ê¸}¥»¡]Windows¡^
-echo Confluence Sync System - ¦h±M®×ºŞ²z¾¹
+REM å¤šå°ˆæ¡ˆç®¡ç†è…³æœ¬å•Ÿå‹•ï¼ˆWindowsï¼‰
+echo Confluence Sync System - å¤šå°ˆæ¡ˆç®¡ç†è…³æœ¬
 echo ==========================================
 echo.
 
-REM ÀË¬d Python
+REM æª¢æŸ¥ Python
 @where python >nul 2>nul
 @if errorlevel 1 (
-  echo [¿ù»~] ¥¼§ä¨ì Python¡C½Ğ¥ı¦w¸Ë Python 3 ¨Ã¥[¤J PATH¡C
+  echo [éŒ¯èª¤] æ‰¾ä¸åˆ° Pythonã€‚è«‹å…ˆå®‰è£ Python 3 ä¸¦åŠ å…¥ PATHã€‚
   echo.
   pause
   exit /b 1
 )
 
-REM ÀË¬d venv
+REM æª¢æŸ¥ venv
 @if not exist "venv\" (
-  echo [¸ê°T] «Ø¥ßµêÀÀÀô¹Ò venv...
+  echo [è³‡è¨Š] å»ºç«‹è™›æ“¬ç’°å¢ƒ venv...
   @python -m venv venv
   @if errorlevel 1 (
-    echo [¿ù»~] «Ø¥ßµêÀÀÀô¹Ò¥¢±Ñ¡C
+    echo [éŒ¯èª¤] å»ºç«‹è™›æ“¬ç’°å¢ƒå¤±æ•—ã€‚
     echo.
     pause
     exit /b 1
   )
 )
 
-REM ±Ò°Ê venv
-echo [¸ê°T] ±Ò°ÊµêÀÀÀô¹Ò...
+REM å•Ÿå‹• venv
+echo [è³‡è¨Š] å•Ÿå‹•è™›æ“¬ç’°å¢ƒ...
 @call "venv\Scripts\activate.bat"
 @if errorlevel 1 (
-  echo [¿ù»~] ±Ò°Ê venv ¥¢±Ñ¡]venv\Scripts\activate.bat¡^¡C
+  echo [éŒ¯èª¤] å•Ÿå‹• venv å¤±æ•—ï¼ˆvenv\Scripts\activate.batï¼‰ã€‚
   echo.
   pause
   exit /b 1
 )
 
-REM ¦w¸Ë¨Ì¿à¡]¥Î python -m pip ½T«O¬O venv ªº pip¡^
-echo [¸ê°T] ¦w¸Ë/§ó·s¨Ì¿à¡]requirements.txt¡^...
+REM å®‰è£ä¾è³´ï¼ˆç”¨ python -m pip ç¢ºä¿æ˜¯ venv çš„ pipï¼‰
+echo [è³‡è¨Š] å®‰è£/æ›´æ–°ä¾è³´ï¼ˆrequirements.txtï¼‰...
 @python -m pip install -q -r requirements.txt
 @if errorlevel 1 (
-  echo [¿ù»~] ¦w¸Ë¨Ì¿à¥¢±Ñ¡]requirements.txt / ºô¸ô / Åv­­¡^¡C
+  echo [éŒ¯èª¤] å®‰è£ä¾è³´å¤±æ•—ï¼ˆrequirements.txt / ç¶²è·¯ / æ¬Šé™ï¼‰ã€‚
   echo.
   pause
   exit /b 1
 )
 
 echo.
-echo [§¹¦¨] Àô¹Ò·Ç³Æ§¹¦¨¡I
+echo [å®Œæˆ] ç’°å¢ƒæº–å‚™å®Œæˆï¼
 echo.
 
-REM ÀË¬d configs.txt
+REM æª¢æŸ¥ configs.txt
 @if not exist "configs.txt" (
-  echo [Äµ§i] ¥¼§ä¨ì°t¸m²M³æ configs.txt
-  echo        ½Ğ¥ı«Ø¥ß configs.txt¡A½d¨Ò¡G
+  echo [è­¦å‘Š] æ‰¾ä¸åˆ°é…ç½®æ¸…å–® configs.txt
+  echo        è«‹å…ˆå»ºç«‹ configs.txtï¼Œä¾‹å¦‚ï¼š
   echo          config/project_a.yaml
   echo          config/project_b.yaml
   echo          config/project_c.yaml
@@ -65,29 +65,37 @@ REM ÀË¬d configs.txt
   exit /b 1
 )
 
-REM ²Î­p°t¸m¼Æ¶q¡]±Æ°£µù¸Ñ»PªÅ¦æ¡^
+REM çµ±è¨ˆ configs.txt æœ‰æ•ˆé…ç½®æ•¸é‡ï¼ˆè·³éç©ºè¡Œèˆ‡ # è¨»è§£è¡Œï¼›ä¸ä¾è³´ findstr / ç·¨ç¢¼ï¼‰
 set /a CONFIG_COUNT=0
-for /f "usebackq delims=" %%L in (`type "configs.txt" ^| findstr /R /V "^[ 	]*$" ^| findstr /R /V "^[ 	]*#"`) do (
-  set /a CONFIG_COUNT+=1
+for /f "usebackq delims=" %%L in ("configs.txt") do (
+  set "line=%%L"
+
+  REM å»æ‰å‰å°ç©ºç™½ï¼ˆtokens=*ï¼‰
+  for /f "tokens=* delims= " %%A in ("!line!") do set "line=%%A"
+
+  REM è·³éç©ºè¡Œèˆ‡è¨»è§£è¡Œ
+  if not "!line!"=="" if not "!line:~0,1!"=="#" (
+    set /a CONFIG_COUNT+=1
+  )
 )
 
-echo [¸ê°T] §ä¨ì !CONFIG_COUNT! ­Ó±M®×°t¸m
+echo [è³‡è¨Š] æ‰¾åˆ° !CONFIG_COUNT! å€‹å°ˆæ¡ˆé…ç½®
 echo.
 
 if !CONFIG_COUNT! LEQ 0 (
-  echo [Äµ§i] configs.txt ¤º¨S¦³¦³®Ä°t¸m¡]ªÅ¥Õ©Î¥ş¬Oµù¸Ñ¡^¡C
+  echo [è­¦å‘Š] configs.txt å…§æ²’æœ‰æœ‰æ•ˆé…ç½®ï¼ˆç©ºç™½æˆ–å…¨æ˜¯è¨»è§£ï¼‰ã€‚
   echo.
   pause
   exit /b 1
 )
 
-REM ¹w³]¤@«ßºÊÅ¥¼Ò¦¡¡]watch¡^
-echo [°õ¦æ] ±Ò°ÊºÊÅ¥¼Ò¦¡¡]watch¡^...
+REM é è¨­ä¸€å¾‹å•Ÿå‹• watch æ¨¡å¼
+echo [é‹è¡Œ] å•Ÿå‹•ç›£è½æ¨¡å¼ï¼ˆwatchï¼‰...
 echo.
 @python multi_project_manager.py --config-list configs.txt --mode watch %*
 @if errorlevel 1 (
   echo.
-  echo [¿ù»~] multi_project_manager.py °õ¦æ¥¢±Ñ¡]watch¡^¡C½Ğ¬d¬İ¤W¤è¿ù»~°T®§¡C
+  echo [éŒ¯èª¤] multi_project_manager.py é‹è¡Œå¤±æ•—ï¼ˆwatchï¼‰ã€‚è«‹æŸ¥çœ‹ä¸Šæ–¹éŒ¯èª¤è¨Šæ¯ã€‚
   echo.
   pause
   exit /b 1
